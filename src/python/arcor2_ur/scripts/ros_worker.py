@@ -1,5 +1,4 @@
 import importlib
-import math
 import multiprocessing
 import threading
 import time
@@ -29,7 +28,7 @@ from arcor2.data import object_type
 from arcor2.data.common import Joint, Orientation, Pose, Position
 from arcor2.data.robot import InverseKinematicsRequest
 from arcor2.logging import get_logger
-from arcor2_object_types.abstract import GraspableState
+from arcor2_object_types.abstract import EffectorType, GraspableState, GraspPosition
 from arcor2_ur import topics
 from arcor2_ur.common import CollisionSceneObject
 from arcor2_ur.exceptions import UrGeneral
@@ -156,17 +155,24 @@ def rotate_effector(a: Orientation, b: Orientation) -> Orientation:
     )
 
 
-def generate_grasp_poses(object: CollisionSceneObject, effector_type: str) -> list[tuple[Pose, Pose]]:
+def generate_grasp_poses(
+    object: CollisionSceneObject,
+    effector_type: EffectorType,
+    grasp_positions: list[str] | None,
+) -> list[tuple[Pose, Pose]]:
+    if grasp_positions is None:
+        grasp_positions = [GraspPosition.ALL.value]
+
     grasp_poses: list[tuple[Pose, Pose]] = []
 
     pre_grasp_offset = 0.20
-    grasp_offset = 0.01  # TODO: -0.01 ?
+    grasp_offset = -0.01  # TODO: -0.01 ?
 
-    if effector_type == "suck":
+    if effector_type == EffectorType.SUCK:
         if not isinstance(object.model, object_type.Mesh):
-            half_x = 0
-            half_y = 0
-            half_z = 0
+            half_x = 0.0
+            half_y = 0.0
+            half_z = 0.0
 
             if isinstance(object.model, object_type.Box):
                 half_x = object.model.size_x / 2
@@ -185,16 +191,34 @@ def generate_grasp_poses(object: CollisionSceneObject, effector_type: str) -> li
             cz = object.pose.position.z
             q = object.pose.orientation
 
-            # TODO: dat moznost preferovanej rotacie ?
-            faces = [
-                ((0.0, 0.0, half_z), (0.0, 0.0, 1.0), Orientation(1, 0, 0, 0))(  # TOP
-                    (-half_x, 0.0, 0.0), (-1.0, 0.0, 0.0), Orientation(0, 1, 0, 1)
-                ),  # LEFT
-                ((half_x, 0.0, 0.0), (1.0, 0.0, 0.0), Orientation(0, -1, 0, 1)),  # RIGHT
-                ((0.0, -half_y, 0.0), (0.0, -1.0, 0.0), Orientation(-1, 0, 0, 1)),  # FRONT
-                ((0.0, half_y, 0.0), (0.0, 1.0, 0.0), Orientation(1, 0, 0, 1)),  # BACK
-                ((0.0, 0.0, -half_z), (0.0, 0.0, -1.0), Orientation(0, 0, 1, 1)),
-            ]  # BOTTOM
+            faces = []
+            if GraspPosition.ALL in grasp_positions:
+                faces = [
+                    ((0.0, 0.0, half_z), (0.0, 0.0, 1.0), Orientation(1, 0, 0, 0)),  # TOP
+                    ((-half_x, 0.0, 0.0), (-1.0, 0.0, 0.0), Orientation(0, 1, 0, 1)),  # LEFT
+                    ((half_x, 0.0, 0.0), (1.0, 0.0, 0.0), Orientation(0, -1, 0, 1)),  # RIGHT
+                    ((0.0, -half_y, 0.0), (0.0, -1.0, 0.0), Orientation(-1, 0, 0, 1)),  # FRONT
+                    ((0.0, half_y, 0.0), (0.0, 1.0, 0.0), Orientation(1, 0, 0, 1)),  # BACK
+                    ((0.0, 0.0, -half_z), (0.0, 0.0, -1.0), Orientation(0, 0, 1, 1)),  # BOTTOM
+                ]
+            else:
+                if GraspPosition.TOP in grasp_positions:
+                    faces.append(((0.0, 0.0, half_z), (0.0, 0.0, 1.0), Orientation(1, 0, 0, 0)))
+
+                if GraspPosition.LEFT in grasp_positions:
+                    faces.append(((-half_x, 0.0, 0.0), (-1.0, 0.0, 0.0), Orientation(0, 1, 0, 1)))
+
+                if GraspPosition.RIGHT in grasp_positions:
+                    faces.append(((half_x, 0.0, 0.0), (1.0, 0.0, 0.0), Orientation(0, -1, 0, 1)))
+
+                if GraspPosition.FRONT in grasp_positions:
+                    faces.append(((0.0, -half_y, 0.0), (0.0, -1.0, 0.0), Orientation(-1, 0, 0, 1)))
+
+                if GraspPosition.BACK in grasp_positions:
+                    faces.append(((0.0, half_y, 0.0), (0.0, 1.0, 0.0), Orientation(1, 0, 0, 1)))
+
+                if GraspPosition.BOTTOM in grasp_positions:
+                    faces.append(((0.0, 0.0, -half_z), (0.0, 0.0, -1.0), Orientation(0, 0, 0, 1)))
 
             for local_center, local_normal, local_effector_orientation in faces:
                 rcx, rcy, rcz = rotate_vector(q, local_center)
@@ -879,28 +903,44 @@ class RosWorkerRuntime:
             raise UrGeneral("MoveIt is not initialized.")
         return self.moveitpy, self.ur_manipulator
 
-    def attach_object(self, object_id: str, effector_type: str, velocity: float, payload: float, safe: bool) -> None:
+    def get_attached_object_id(self) -> str | None:
+        for obj_id, obj in self.collision_objects.items():
+            if obj.metadata.get("state") == GraspableState.ATTACHED.value:
+                return obj_id
+        return None
+
+    def attach_object(
+        self,
+        object_id: str,
+        effector_type: EffectorType,
+        grasp_positions: list[str] | None,
+        velocity: float,
+        payload: float,
+        safe: bool,
+    ) -> None:
         object = self.collision_objects[object_id]
         object.metadata.pop("attached_pose", None)
 
-        grasp_options = generate_grasp_poses(object, effector_type)
+        grasp_options = generate_grasp_poses(object, effector_type, grasp_positions)
         for pre_grasp_pose, grasp_pose in grasp_options:
 
             try:
                 self.move_to_pose(pre_grasp_pose, velocity, payload, safe)
                 object.metadata["state"] = GraspableState.HIDEN.value
 
-                """
-                self.suck(60)
-                time.sleep(1.0)
+                if self.tool:  # Skip vacuum activation/check when no physical tool is configured
+                    self.suck(60)
+                    time.sleep(1.0)
 
-                vac = Vacuum.from_dict(self.vacuum())
-                if vac.avg() < 20:
-                    self.release()
-                    raise UrGeneral(f"Failed to attach object {object.id}: vacuum not reached.")
-                """
                 self.move_to_pose(grasp_pose, velocity, payload, safe)
 
+                if self.tool:
+                    vac = Vacuum.from_dict(self.vacuum())
+                    if vac.avg() < 20:
+                        self.release()
+                        raise UrGeneral(f"Failed to attach object {object_id}: vacuum not reached.")
+
+                # TODO: send info to ur
                 object.metadata["state"] = GraspableState.ATTACHED.value
                 attached_pose = tr.make_pose_rel(grasp_pose, object.pose)
                 object.metadata["attached_pose"] = attached_pose.to_dict()
@@ -912,7 +952,11 @@ class RosWorkerRuntime:
 
         raise UrGeneral(f"Unable to attach object {object_id}.")
 
-    def detach_object(self, object_id: str, target_pose: Pose, velocity: float, payload: float, safe: bool) -> None:
+    def detach_object(self, target_pose: Pose, velocity: float, payload: float, safe: bool) -> None:
+        object_id = self.get_attached_object_id()
+        if object_id is None:
+            raise UrGeneral("No object to detach.")
+
         object = self.collision_objects[object_id]
 
         attached_pose_dict = object.metadata.get("attached_pose")
@@ -925,7 +969,7 @@ class RosWorkerRuntime:
 
         self.move_to_pose(target_eef_pose, velocity, payload, safe)
 
-        # self.release()S
+        self.release()
 
         self.remove_object(object_id)
 
@@ -1013,23 +1057,25 @@ def ros_worker_main(
                 elif op == "move_to_pose":
                     pose = Pose.from_dict(kwargs["pose"])
                     result = runtime.move_to_pose(pose, kwargs["velocity"], kwargs["payload"], kwargs["safe"])
-                elif op == "attach_object":
-                    result = runtime.attach_object(
+                elif op == "pick_up_object":
+                    runtime.attach_object(
                         kwargs["object_id"],
-                        kwargs["effector_type"],
+                        EffectorType(kwargs["effector_type"]),
+                        [GraspPosition(gp) for gp in kwargs["grasp_positions"]],
                         kwargs["velocity"],
                         kwargs["payload"],
                         kwargs["safe"],
                     )
-                elif op == "detach_object":
+                    result = {}
+                elif op == "place_object":
                     pose = Pose.from_dict(kwargs["pose"])
-                    result = runtime.detach_object(
-                        kwargs["object_id"],
+                    runtime.detach_object(
                         pose,
                         kwargs["velocity"],
                         kwargs["payload"],
                         kwargs["safe"],
                     )
+                    result = {}
                 elif op == "get_joints":
                     result = runtime.get_joints()
                 elif op == "ik":

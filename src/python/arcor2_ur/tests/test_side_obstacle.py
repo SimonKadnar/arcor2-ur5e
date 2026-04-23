@@ -1,4 +1,3 @@
-import math
 import time
 
 import pytest
@@ -19,12 +18,12 @@ def test_box(start_processes: Urls) -> None:
     ot = Ur5e("", "", Pose(), UrSettings(start_processes.robot_url))
     assert len(ot.robot_joints()) == 6
 
+    X = 0.5
     Y = 0.0
-    Z = 0.2
-    X = 0.9
+    Z = 0.3
 
-    start_pose = Pose(Position(X, Y, Z), Orientation(0, 0, 0, 1))
-    goal_pose = Pose(Position(Y, X, Z), Orientation(0, 0, 0, 1))
+    start_pose = Pose(Position(X, Y, Z), Orientation(1, 0, 0, 0))
+    goal_pose = Pose(Position(Y, X, Z), Orientation(1, 0, 0, 0))
     ot.move_to_pose("", start_pose, 0.3, safe=False)
 
     box = Box("Box1", 0.2, 0.2, 0.95)
@@ -55,12 +54,12 @@ def test_cylinder(start_processes: Urls) -> None:
     ot = Ur5e("", "", Pose(), UrSettings(start_processes.robot_url))
     assert len(ot.robot_joints()) == 6
 
+    X = 0.5
     Y = 0.0
-    Z = 0.2
-    X = 0.9
+    Z = 0.3
 
-    start_pose = Pose(Position(X, Y, Z), Orientation(0, 0, 0, 1))
-    goal_pose = Pose(Position(Y, X, Z), Orientation(0, 0, 0, 1))
+    start_pose = Pose(Position(X, Y, Z), Orientation(1, 0, 0, 0))
+    goal_pose = Pose(Position(Y, X, Z), Orientation(1, 0, 0, 0))
     ot.move_to_pose("", start_pose, 0.3, safe=False)
 
     cyl = Cylinder("Cyl1", 0.1, 0.95)
@@ -91,12 +90,12 @@ def test_sphere(start_processes: Urls) -> None:
     ot = Ur5e("", "", Pose(), UrSettings(start_processes.robot_url))
     assert len(ot.robot_joints()) == 6
 
+    X = 0.5
     Y = 0.0
-    Z = 0.2
-    X = 0.9
+    Z = 0.3
 
-    start_pose = Pose(Position(X, Y, Z), Orientation(0, 0, 0, 1))
-    goal_pose = Pose(Position(Y, X, Z), Orientation(0, 0, 0, 1))
+    start_pose = Pose(Position(X, Y, Z), Orientation(1, 0, 0, 0))
+    goal_pose = Pose(Position(Y, X, Z), Orientation(1, 0, 0, 0))
     ot.move_to_pose("", start_pose, 0.3, safe=False)
 
     sphere = Sphere("Sphere1", 0.09)
