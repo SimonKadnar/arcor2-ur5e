@@ -1,12 +1,12 @@
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import cast
 
 from dataclasses_jsonschema import JsonSchemaMixin
 
 from arcor2.data.common import ActionMetadata, Joint, Pose, Position, StrEnum
 from arcor2.data.robot import InverseKinematicsRequest
-from arcor2_object_types.abstract import Robot, Settings
+from arcor2_object_types.abstract import EffectorType, GraspPosition, Robot, Settings
 from arcor2_web import rest
 
 
@@ -25,9 +25,12 @@ class Vacuum(JsonSchemaMixin):
 
 
 @dataclass
-class AttachObject(JsonSchemaMixin):
-    object_id: str
-    effector_type: str
+class PickUpObject(JsonSchemaMixin):
+    position: Position
+    radius: float
+    effector_type: EffectorType = EffectorType.SUCK
+    grasp_positions: list[GraspPosition] = field(default_factory=lambda: [GraspPosition.ALL])
+    object_type_name: None | str = None
     velocity: float = 50.0
     payload: float = 0.0
     safe: bool = True
@@ -35,7 +38,6 @@ class AttachObject(JsonSchemaMixin):
 
 @dataclass
 class DetachObject(JsonSchemaMixin):
-    object_id: str
     pose: Pose
     velocity: float = 50.0
     payload: float = 0.0
@@ -91,7 +93,7 @@ class Ur5e(Robot):
         return set()
 
     def suctions(self) -> set[str]:
-        return set("default")
+        return {"default"}
 
     def get_end_effector_pose(self, end_effector_id: str) -> Pose:
         return rest.call(rest.Method.GET, f"{self.settings.url}/eef/pose", return_type=Pose)
@@ -131,33 +133,42 @@ class Ur5e(Robot):
                 params={"velocity": speed, "payload": payload, "safe": safe},
             )
 
-    def attach_object(
+    def pick_up_object(
         self,
-        object_id: str,
-        effector_type: str,
+        position: Position,
+        radius: float,
+        effector_type: EffectorType = EffectorType.SUCK,
+        grasp_positions: None | list[GraspPosition] = None,
+        object_type_name: None | str = None,
         speed: float = 50.0,
         safe: bool = True,
         payload: float = 0.0,
     ) -> None:
+        assert radius >= 0.0
         assert 0.0 <= speed <= 100.0
         assert 0.0 <= payload <= 5.0
+
+        if grasp_positions is None:
+            grasp_positions = [GraspPosition.ALL]
 
         with self._move_lock:
             rest.call(
                 rest.Method.PUT,
-                f"{self.settings.url}/graspable/attach",
-                body=AttachObject(
-                    object_id=object_id,
+                f"{self.settings.url}/graspable/pick_up_object",
+                body=PickUpObject(
+                    position=position,
+                    radius=radius,
                     effector_type=effector_type,
+                    grasp_positions=grasp_positions,
+                    object_type_name=object_type_name,
                     velocity=speed,
                     payload=payload,
                     safe=safe,
                 ),
             )
 
-    def detach_object(
+    def place_object(
         self,
-        object_id: str,
         pose: Pose,
         speed: float = 50.0,
         safe: bool = True,
@@ -169,9 +180,8 @@ class Ur5e(Robot):
         with self._move_lock:
             rest.call(
                 rest.Method.PUT,
-                f"{self.settings.url}/graspable/detach",
+                f"{self.settings.url}/graspable/place_object",
                 body=DetachObject(
-                    object_id=object_id,
                     pose=pose,
                     velocity=speed,
                     payload=payload,

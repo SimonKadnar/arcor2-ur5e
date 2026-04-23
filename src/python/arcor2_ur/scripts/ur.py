@@ -5,8 +5,7 @@ import logging
 import os
 from dataclasses import dataclass, field
 from functools import wraps
-from math import dist
-from typing import Any
+from importlib import resources
 
 import humps
 from ament_index_python.packages import get_package_share_directory  # pants: no-infer-dep
@@ -19,8 +18,8 @@ from arcor2.data.common import Joint, Pose
 from arcor2.data.robot import InverseKinematicsRequest
 from arcor2.helpers import port_from_url
 from arcor2.logging import get_logger
-from arcor2_object_types.abstract import GraspableState
-from arcor2_ur import get_data, version
+from arcor2_object_types.abstract import EffectorType, GraspableState, GraspPosition
+from arcor2_ur import version
 from arcor2_ur.common import CollisionSceneObject, parse_collision_body
 from arcor2_ur.exceptions import NotFound, StartError, UrGeneral, WebApiError
 from arcor2_ur.object_types.ur5e import Vacuum
@@ -31,7 +30,7 @@ logger = get_logger(__name__)
 
 URL = os.getenv("ARCOR2_UR_URL", "http://localhost:5012")
 BASE_LINK = os.getenv("ARCOR2_UR_BASE_LINK", "base_link")
-TOOL_LINK = os.getenv("ARCOR2_UR_TOOL_LINK", "tool0")
+TOOL_LINK = os.getenv("ARCOR2_UR_TOOL_LINK", "suction_tcp")
 UR_TYPE = os.getenv("ARCOR2_UR_TYPE", "ur5e")
 PLANNING_GROUP_NAME = os.getenv("ARCOR2_UR_PLANNING_GROUP_NAME", "ur_manipulator")
 ROBOT_IP = os.getenv("ARCOR2_UR_ROBOT_IP", "")
@@ -58,25 +57,43 @@ class Globs:
 globs: Globs = Globs()
 app = create_app(__name__)
 
+
 # this is normally specified in a launch file
-moveit_config = (
-    MoveItConfigsBuilder(robot_name="ur", package_name="ur_moveit_config")
-    .robot_description(
-        os.path.join(get_package_share_directory("ur_description"), "urdf", "ur.urdf.xacro"),
-        {"name": "ur", "ur_type": UR_TYPE},
-    )
-    .robot_description_semantic(
-        os.path.join(get_package_share_directory("ur_moveit_config"), "srdf", "ur.srdf.xacro"), {"name": UR_TYPE}
-    )
-    .trajectory_execution(
-        os.path.join(get_package_share_directory("ur_moveit_config"), "config", "moveit_controllers.yaml")
-    )
-    .robot_description_kinematics(
-        os.path.join(get_package_share_directory("ur_moveit_config"), "config", "kinematics.yaml")
-    )
-    .moveit_cpp(file_path=get_data("moveit.yaml"))
-    .to_moveit_configs()
-).to_dict()
+def load_custom_urdf() -> str:
+    urdf_res = resources.files("arcor2_ur").joinpath("data/urdf/ur5e.urdf")
+    meshes_res = resources.files("arcor2_ur").joinpath("data/urdf/meshes")
+
+    text = urdf_res.read_text(encoding="utf-8")
+
+    with resources.as_file(meshes_res) as meshes_dir:
+        text = text.replace(
+            "package://meshes/",
+            f"file://{meshes_dir.as_posix()}/",
+        )
+
+    return text
+
+
+moveit_yaml_res = resources.files("arcor2_ur").joinpath("data/moveit.yaml")
+
+with resources.as_file(moveit_yaml_res) as moveit_yaml_path:
+    moveit_config = (
+        MoveItConfigsBuilder(robot_name="ur", package_name="ur_moveit_config")
+        .robot_description_semantic(
+            os.path.join(get_package_share_directory("ur_moveit_config"), "srdf", "ur.srdf.xacro"),
+            {"name": UR_TYPE},
+        )
+        .trajectory_execution(
+            os.path.join(get_package_share_directory("ur_moveit_config"), "config", "moveit_controllers.yaml")
+        )
+        .robot_description_kinematics(
+            os.path.join(get_package_share_directory("ur_moveit_config"), "config", "kinematics.yaml")
+        )
+        .moveit_cpp(file_path=str(moveit_yaml_path))
+        .to_moveit_configs()
+    ).to_dict()
+
+moveit_config["robot_description"] = load_custom_urdf()
 
 
 def started() -> bool:
@@ -196,104 +213,15 @@ def get_started() -> RespT:
     return jsonify(started())
 
 
-@app.route("/graspable/reserve-nearest", methods=["PUT"])
-def put_reserve_nearest_graspable() -> RespT:
-    """Reserve nearest graspable object in WORLD state.
-    ---
-    put:
-        tags:
-            - Graspable
-        description: Find the nearest graspable object in WORLD state within the given radius, mark it as RESERVED, and return its ID. If no such object is found, returns null.
-        requestBody:
-              content:
-                application/json:
-                  schema:
-                    type: object
-                    required:
-                      - position
-                      - radius
-                    properties:
-                      position:
-                        $ref: Position
-                      radius:
-                        type: number
-                        format: float
-        responses:
-            200:
-              description: ID of the reserved graspable object, or null if no matching object was found.
-              content:
-                application/json:
-                  schema:
-                    oneOf:
-                      - type: string
-                      - type: "null"
-            500:
-              description: "Error types: **General**, **UrGeneral**."
-              content:
-                application/json:
-                  schema:
-                    $ref: WebApiError
-    """
-    if not isinstance(request.json, dict):
-        raise UrGeneral("Body should be a JSON dict containing position and radius.")
-
-    body = humps.decamelize(request.json)
-
-    try:
-        position = common.Position.from_dict(body["position"])
-        radius = float(body["radius"])
-    except KeyError as exc:
-        raise UrGeneral(f"Missing key: {exc.args[0]}")
-
-    if radius < 0.0:
-        raise UrGeneral("Radius has to be >= 0.")
-
-    nearest_id: str | None = None
-    nearest_distance: float | None = None
-
-    for obj_id, obj in globs.collision_objects.items():
-
-        # only graspable objects
-        if obj.metadata.get("object_type") != "graspable":
-            continue
-
-        # only WORLD objects
-        if obj.metadata.get("state") != GraspableState.WORLD.value:
-            continue
-
-        current_distance = position.distance(obj.pose.position)
-
-        if current_distance >= radius:
-            continue
-
-        if nearest_distance is None or current_distance < nearest_distance:
-            nearest_id = obj_id
-            nearest_distance = current_distance
-
-    if nearest_id is None:
-        return jsonify("")
-
-    # change object state to RESERVED
-    globs.collision_objects[nearest_id].metadata["state"] = GraspableState.RESERVED.value
-
-    # refresh worker
-    if started():
-        assert globs.state
-        globs.state.worker.request("update_collisions", collision_objects=globs.collision_objects)
-
-    return jsonify(nearest_id)
-
-
-@app.route("/graspable/attach", methods=["PUT"])
+@app.route("/graspable/pick_up_object", methods=["PUT"])
 @requires_started
-def attach_object() -> RespT:
-    """Attaches a graspable object to the robot end-effector.
-    The robot first moves to a pre-attach pose and then to the attach pose.
+def pick_up_object() -> RespT:
+    """Find nearest graspable object and attach it.
     ---
     put:
         tags:
             - Graspable
-        summary: Attach a graspable object using pre-attach and attach poses.
+        summary: Find nearest graspable object in radius and attach it.
         requestBody:
             required: true
             content:
@@ -301,13 +229,24 @@ def attach_object() -> RespT:
                     schema:
                         type: object
                         required:
-                            - object_id
-                            - effector_type
+                            - position
+                            - radius
                         properties:
-                            object_id:
-                                type: string
+                            position:
+                                $ref: Position
+                            radius:
+                                type: number
+                                format: float
                             effector_type:
                                 type: string
+                                default: suck
+                            grasp_positions:
+                                type: array
+                                items:
+                                    type: string
+                            model3d_type:
+                                type: string
+                                default: none
                             velocity:
                                 type: number
                                 format: float
@@ -323,37 +262,98 @@ def attach_object() -> RespT:
             204:
                 description: Ok
             500:
-                description: "Error types: **General**."
+                description: "Error types: **General**, **UrGeneral**."
                 content:
                     application/json:
                         schema:
                             $ref: WebApiError
     """
+    if not isinstance(request.json, dict):
+        raise UrGeneral("Body should be a JSON dict.")
 
     body = humps.decamelize(request.json)
 
-    object_id = body["object_id"]
-    effector_type = body["effector_type"]
+    try:
+        position = common.Position.from_dict(body["position"])
+        radius = float(body["radius"])
+    except KeyError as exc:
+        raise UrGeneral(f"Missing key: {exc.args[0]}")
+
+    if radius < 0.0:
+        raise UrGeneral("Radius has to be >= 0.")
+
+    effector_type = EffectorType(body.get("effector_type", EffectorType.SUCK.value))
+    grasp_positions = body.get(
+        "grasp_positions",
+        [
+            GraspPosition.TOP.value,
+            GraspPosition.RIGHT.value,
+            GraspPosition.LEFT.value,
+            GraspPosition.FRONT.value,
+            GraspPosition.BACK.value,
+            GraspPosition.BOTTOM.value,
+            GraspPosition.ALL,
+        ],
+    )
+
+    object_type_cls = getattr(object_type, body["object_type_name"]) if body.get("object_type_name") else None
+
     velocity = float(body.get("velocity", 50.0)) / 100.0
     payload = float(body.get("payload", 0.0))
     safe = bool(body.get("safe", True))
 
+    nearest_id: str | None = None
+    nearest_distance: float | None = None
+
+    for obj_id, obj in globs.collision_objects.items():
+        if obj.metadata.get("object_type") != "graspable":
+            continue
+
+        if obj.metadata.get("state") != GraspableState.WORLD.value:
+            continue
+
+        if object_type_cls is not None and not isinstance(obj.model, object_type_cls):
+            continue
+
+        current_distance = position.distance(obj.pose.position)
+        if current_distance > radius:
+            continue
+
+        if nearest_distance is None or current_distance < nearest_distance:
+            nearest_id = obj_id
+            nearest_distance = current_distance
+
+    if nearest_id is None:
+        raise UrGeneral("No graspable object found for given position, radius and type.")
+
+    selected = globs.collision_objects[nearest_id]
+    previous_state = selected.metadata.get("state")
+    selected.metadata["state"] = GraspableState.RESERVED.value
+
     assert globs.state
-    globs.state.worker.request(
-        "attach_object",
-        object_id=object_id,
-        effector_type=effector_type,
-        velocity=velocity,
-        payload=payload,
-        safe=safe,
-    )
+
+    try:
+        globs.state.worker.request("update_collisions", collision_objects=globs.collision_objects)
+        globs.state.worker.request(
+            "pick_up_object",
+            object_id=nearest_id,
+            effector_type=effector_type,
+            grasp_positions=grasp_positions,
+            velocity=velocity,
+            payload=payload,
+            safe=safe,
+        )
+    except Exception:
+        selected.metadata["state"] = previous_state
+        globs.state.worker.request("update_collisions", collision_objects=globs.collision_objects)
+        raise
 
     return Response(status=204)
 
 
-@app.route("/graspable/detach", methods=["PUT"])
+@app.route("/graspable/place_object", methods=["PUT"])
 @requires_started
-def detach_object() -> RespT:
+def place_object() -> RespT:
     """Moves graspable object using robot.
     ---
     put:
@@ -367,7 +367,6 @@ def detach_object() -> RespT:
                     schema:
                         type: object
                         required:
-                            - object_id
                             - effector_type
                             - pose
                         properties:
@@ -390,7 +389,6 @@ def detach_object() -> RespT:
 
     body = humps.decamelize(request.json)
 
-    object_id = body["object_id"]
     pose = Pose.from_dict(body["pose"])
     velocity = float(body.get("velocity", 50.0)) / 100.0
     payload = float(body.get("payload", 0.0))
@@ -398,8 +396,7 @@ def detach_object() -> RespT:
 
     assert globs.state
     globs.state.worker.request(
-        "detach_object",
-        object_id=object_id,
+        "place_object",
         pose=pose.to_dict(),
         velocity=velocity,
         payload=payload,

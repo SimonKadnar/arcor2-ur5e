@@ -3,7 +3,6 @@ import copy
 import inspect
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from enum import Enum
 
 from dataclasses_jsonschema import JsonSchemaMixin
 from PIL import Image
@@ -185,6 +184,21 @@ class CollisionObject(GenericWithPose):
     set_enabled.__action__ = ActionMetadata()  # type: ignore
 
 
+class GraspPosition(StrEnum):
+    TOP = "TOP"
+    RIGHT = "RIGHT"
+    LEFT = "LEFT"
+    FRONT = "FRONT"
+    BACK = "BACK"
+    BOTTOM = "BOTTOM"
+    ALL = "ALL"
+
+
+class EffectorType(StrEnum):
+    SUCK = "SUCK"
+
+
+# TODO: zmenit na int
 class GraspableState(StrEnum):
     """Logical state of a graspable object in the scene.
 

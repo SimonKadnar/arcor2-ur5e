@@ -4,6 +4,7 @@ import random
 import signal
 import subprocess as sp
 import time
+from pathlib import Path
 from typing import Iterator, NamedTuple
 
 import pytest
@@ -99,6 +100,32 @@ def start_processes(request) -> Iterator[Urls]:
     if processes[-1].poll():
         log_proc_output(processes[-1].communicate())
         raise Exception("Launch died...")
+
+    # kill default robot_state_publisher
+    sp.run("pkill -f robot_state_publisher", shell=True)
+
+    # start custom robot_state_publisher with modified URDF
+    urdf_path = Path(__file__).resolve().parents[1] / "data" / "urdf" / "ur5e.urdf"
+
+    custom_rsp = sp.Popen(
+        [
+            "ros2",
+            "run",
+            "robot_state_publisher",
+            "robot_state_publisher",
+            "--ros-args",
+            "-p",
+            f"robot_description:={urdf_path.read_text()}",
+        ],
+        env=ros_launch_env,
+        stdout=sp.PIPE,
+        stderr=sp.STDOUT,
+        start_new_session=True,
+    )
+
+    processes.append(custom_rsp)
+
+    time.sleep(2)
 
     robot_url = f"http://0.0.0.0:{find_free_port()}"
     my_env["ARCOR2_UR_URL"] = robot_url

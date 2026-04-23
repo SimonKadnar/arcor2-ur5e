@@ -158,13 +158,6 @@ def upsert_graspable(
     rest.call(rest.Method.PUT, f"{URL}/collisions/{model_type}", body=body, params=params)
 
 
-# TODO: change endpoint /collisions/... ?
-def reserve_nearest_graspable(position: Position, radius: float) -> str:
-    return rest.call(
-        rest.Method.PUT, f"{URL}/graspable/reserve-nearest", body=ReserveGraspable(position, radius), return_type=str
-    )
-
-
 @handle(SceneServiceException, logger, message="Failed to delete the collision.")
 def delete_collision_id(collision_id: str) -> None:
     rest.call(rest.Method.DELETE, f"{URL}/collisions/{collision_id}")
@@ -258,5 +251,4 @@ __all__ = [
     upsert_transform.__name__,
     local_pose.__name__,
     world_pose.__name__,
-    reserve_nearest_graspable.__name__,
 ]
