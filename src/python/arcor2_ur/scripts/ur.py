@@ -3,9 +3,12 @@
 import argparse
 import logging
 import os
+import shutil
+import tempfile
 from dataclasses import dataclass, field
 from functools import wraps
 from importlib import resources
+from pathlib import Path
 
 import humps
 from ament_index_python.packages import get_package_share_directory  # pants: no-infer-dep
@@ -65,11 +68,16 @@ def load_custom_urdf() -> str:
 
     text = urdf_res.read_text(encoding="utf-8")
 
-    with resources.as_file(meshes_res) as meshes_dir:
-        text = text.replace(
-            "package://meshes/",
-            f"file://{meshes_dir.as_posix()}/",
-        )
+    meshes_cache_dir = Path(tempfile.gettempdir()) / f"arcor2_ur_meshes_{version()}"
+
+    if not meshes_cache_dir.exists():
+        with resources.as_file(meshes_res) as meshes_dir:
+            shutil.copytree(meshes_dir, meshes_cache_dir, dirs_exist_ok=True)
+
+    text = text.replace(
+        "package://meshes/",
+        f"file://{meshes_cache_dir.as_posix()}/",
+    )
 
     return text
 
@@ -244,7 +252,7 @@ def pick_up_object() -> RespT:
                                 type: array
                                 items:
                                     type: string
-                            model3d_type:
+                            object_type_name:
                                 type: string
                                 default: none
                             velocity:
@@ -282,16 +290,16 @@ def pick_up_object() -> RespT:
     if radius < 0.0:
         raise UrGeneral("Radius has to be >= 0.")
 
-    effector_type = EffectorType(body.get("effector_type", EffectorType.SUCK.value))
+    effector_type = EffectorType(body.get("effector_type", EffectorType.SUCK))
     grasp_positions = body.get(
         "grasp_positions",
         [
-            GraspPosition.TOP.value,
-            GraspPosition.RIGHT.value,
-            GraspPosition.LEFT.value,
-            GraspPosition.FRONT.value,
-            GraspPosition.BACK.value,
-            GraspPosition.BOTTOM.value,
+            GraspPosition.TOP,
+            GraspPosition.RIGHT,
+            GraspPosition.LEFT,
+            GraspPosition.FRONT,
+            GraspPosition.BACK,
+            GraspPosition.BOTTOM,
             GraspPosition.ALL,
         ],
     )
@@ -309,7 +317,7 @@ def pick_up_object() -> RespT:
         if obj.metadata.get("object_type") != "graspable":
             continue
 
-        if obj.metadata.get("state") != GraspableState.WORLD.value:
+        if obj.metadata.get("state") != GraspableState.WORLD:
             continue
 
         if object_type_cls is not None and not isinstance(obj.model, object_type_cls):
@@ -328,13 +336,13 @@ def pick_up_object() -> RespT:
 
     selected = globs.collision_objects[nearest_id]
     previous_state = selected.metadata.get("state")
-    selected.metadata["state"] = GraspableState.RESERVED.value
+    selected.metadata["state"] = GraspableState.RESERVED
 
     assert globs.state
 
     try:
         globs.state.worker.request("update_collisions", collision_objects=globs.collision_objects)
-        globs.state.worker.request(
+        metadata = globs.state.worker.request(
             "pick_up_object",
             object_id=nearest_id,
             effector_type=effector_type,
@@ -343,6 +351,9 @@ def pick_up_object() -> RespT:
             payload=payload,
             safe=safe,
         )
+
+        selected.metadata.clear()
+        selected.metadata.update(metadata)
     except Exception:
         selected.metadata["state"] = previous_state
         globs.state.worker.request("update_collisions", collision_objects=globs.collision_objects)
@@ -395,13 +406,18 @@ def place_object() -> RespT:
     safe = bool(body.get("safe", True))
 
     assert globs.state
-    globs.state.worker.request(
+    update = globs.state.worker.request(
         "place_object",
         pose=pose.to_dict(),
         velocity=velocity,
         payload=payload,
         safe=safe,
     )
+
+    obj = globs.collision_objects[update["object_id"]]
+    obj.metadata["state"] = update["state"]
+    obj.metadata.pop("attached_pose", None)
+    obj.pose = pose
 
     return Response(status=204)
 
@@ -630,8 +646,6 @@ def put_mesh() -> RespT:
     mesh = object_type.Mesh(args["mesh_id"], args["mesh_file_id"])
 
     globs.collision_objects[mesh.id] = CollisionSceneObject(mesh, pose, metadata)
-
-    logger.warning("Mesh ignored (only boxes supported).")
 
     if started():
         assert globs.state

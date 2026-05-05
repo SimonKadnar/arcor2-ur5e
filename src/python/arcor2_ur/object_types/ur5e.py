@@ -138,12 +138,27 @@ class Ur5e(Robot):
         position: Position,
         radius: float,
         effector_type: EffectorType = EffectorType.SUCK,
-        grasp_positions: None | list[GraspPosition] = None,
-        object_type_name: None | str = None,
+        grasp_positions: list[GraspPosition] | None = None,
+        object_type_name: str = "",
         speed: float = 50.0,
         safe: bool = True,
         payload: float = 0.0,
+        *,
+        an: None | str = None,
     ) -> None:
+        """Picks up a graspable object from the selected area.
+
+        :param position: Center of the area where the object should be found.
+        :param radius: Search radius.
+        :param effector_type: Type of end effector used for grasping.
+        :param grasp_position: Preferred grasp position.
+        :param object_type_name: Optional object model type filter.
+        :param speed: Relative speed.
+        :param safe: Avoid collisions.
+        :param payload: Object weight.
+        :return:
+        """
+
         assert radius >= 0.0
         assert 0.0 <= speed <= 100.0
         assert 0.0 <= payload <= 5.0
@@ -160,7 +175,7 @@ class Ur5e(Robot):
                     radius=radius,
                     effector_type=effector_type,
                     grasp_positions=grasp_positions,
-                    object_type_name=object_type_name,
+                    object_type_name=object_type_name or None,
                     velocity=speed,
                     payload=payload,
                     safe=safe,
@@ -173,7 +188,18 @@ class Ur5e(Robot):
         speed: float = 50.0,
         safe: bool = True,
         payload: float = 0.0,
+        *,
+        an: None | str = None,
     ) -> None:
+        """Places the currently attached object to the target pose.
+
+        :param pose: Target pose of the placed object.
+        :param speed: Relative speed.
+        :param safe: Avoid collisions.
+        :param payload: Object weight.
+        :return:
+        """
+
         assert 0.0 <= speed <= 100.0
         assert 0.0 <= payload <= 5.0
 
@@ -266,3 +292,5 @@ class Ur5e(Robot):
         )
 
     move.__action__ = ActionMetadata()  # type: ignore
+    pick_up_object.__action__ = ActionMetadata()  # type: ignore
+    place_object.__action__ = ActionMetadata()  # type: ignore

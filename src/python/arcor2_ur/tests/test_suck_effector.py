@@ -9,8 +9,8 @@ from arcor2_ur.tests.conftest import Urls
 
 
 @pytest.mark.timeout(60)
-def test_basics(start_processes: Urls) -> None:
-    # over, ze test bezi nad upravenym URDF modelom
+def test_suck_effector(start_processes: Urls) -> None:
+
     robot_description = load_robot_description()
     assert "suction_base_link" in robot_description
     assert "suction_cup_link" in robot_description
@@ -29,8 +29,6 @@ def test_basics(start_processes: Urls) -> None:
 
     assert len(ot.robot_joints()) == 6
 
-    # ak je tool link nastaveny na suction_tcp, toto je prakticky runtime check,
-    # ze sa s tymto TCP vie realne pracovat
     pos = ot.get_end_effector_pose("")
     orig_z = pos.position.z
     pos.position.z -= 0.05

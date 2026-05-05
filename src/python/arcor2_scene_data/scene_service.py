@@ -6,7 +6,7 @@ from typing import Any
 
 from dataclasses_jsonschema import JsonSchemaMixin
 
-from arcor2.data.common import Pose, Position
+from arcor2.data.common import Pose
 from arcor2.data.object_type import Model3dType, Models
 from arcor2.data.scene import LineCheck, LineCheckResult, MeshFocusAction
 from arcor2.exceptions import Arcor2Exception
@@ -29,12 +29,6 @@ class SceneServiceException(Arcor2Exception):
 class CollisionBody(JsonSchemaMixin):
     pose: Pose
     metadata: dict[str, Any] = field(default_factory=dict)
-
-
-@dataclass
-class ReserveGraspable(JsonSchemaMixin):
-    position: Position
-    radius: float
 
 
 @dataclass

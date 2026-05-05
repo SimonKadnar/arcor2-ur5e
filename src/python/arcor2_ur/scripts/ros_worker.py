@@ -29,6 +29,7 @@ from arcor2.data.common import Joint, Orientation, Pose, Position
 from arcor2.data.robot import InverseKinematicsRequest
 from arcor2.logging import get_logger
 from arcor2_object_types.abstract import EffectorType, GraspableState, GraspPosition
+from arcor2_storage import client as storage_client
 from arcor2_ur import topics
 from arcor2_ur.common import CollisionSceneObject
 from arcor2_ur.exceptions import UrGeneral
@@ -92,33 +93,50 @@ def wait_for_future(future, *, timeout_sec: float = 2.0):
     return future.result()
 
 
+# remove id ?
 def create_collision_object(
-    obj: CollisionSceneObject, obj_id: str, frame_id: str, pose_in_frame: Pose, attached_to_link: str | None = None
-) -> CollisionObject | AttachedCollisionObject | None:
-    prim = SolidPrimitive()
-
-    if isinstance(obj.model, object_type.Box):
-        prim.type = SolidPrimitive.BOX
-        prim.dimensions = [obj.model.size_x, obj.model.size_y, obj.model.size_z]
-
-    elif isinstance(obj.model, object_type.Sphere):
-        prim.type = SolidPrimitive.SPHERE
-        prim.dimensions = [obj.model.radius]
-
-    elif isinstance(obj.model, object_type.Cylinder):
-        prim.type = SolidPrimitive.CYLINDER
-        prim.dimensions = [obj.model.height, obj.model.radius]
-
-    else:
-        logger.warning(f"Unsupported collision model for MoveIt scene: {obj.model.type()}. Skipping {obj_id}.")
-        return None
+    obj: CollisionSceneObject,
+    obj_id: str,
+    frame_id: str,
+    pose_in_frame: Pose,
+    attached_to_link: str | None = None,
+) -> CollisionObject | AttachedCollisionObject:
 
     collision_object = CollisionObject()
     collision_object.header.frame_id = frame_id
     collision_object.id = obj_id
-    collision_object.primitives.append(prim)
-    collision_object.primitive_poses.append(pose_to_ros_pose(pose_in_frame))
     collision_object.operation = CollisionObject.ADD
+
+    if isinstance(obj.model, object_type.Box):
+        prim = SolidPrimitive()
+        prim.type = SolidPrimitive.BOX
+        prim.dimensions = [obj.model.size_x, obj.model.size_y, obj.model.size_z]
+
+        collision_object.primitives.append(prim)
+        collision_object.primitive_poses.append(pose_to_ros_pose(pose_in_frame))
+
+    elif isinstance(obj.model, object_type.Sphere):
+        prim = SolidPrimitive()
+        prim.type = SolidPrimitive.SPHERE
+        prim.dimensions = [obj.model.radius]
+
+        collision_object.primitives.append(prim)
+        collision_object.primitive_poses.append(pose_to_ros_pose(pose_in_frame))
+
+    elif isinstance(obj.model, object_type.Cylinder):
+        prim = SolidPrimitive()
+        prim.type = SolidPrimitive.CYLINDER
+        prim.dimensions = [obj.model.height, obj.model.radius]
+
+        collision_object.primitives.append(prim)
+        collision_object.primitive_poses.append(pose_to_ros_pose(pose_in_frame))
+
+    # mal by fungovat subor
+    elif isinstance(obj.model, object_type.Mesh):
+        mesh = storage_client.get_asset_data(obj.model.asset_id)
+
+        collision_object.meshes.append(mesh)
+        collision_object.mesh_poses.append(pose_to_ros_pose(pose_in_frame))
 
     if attached_to_link is not None:
         attached = AttachedCollisionObject()
@@ -278,10 +296,6 @@ def compute_offset_pose_in_tool_axis(pose: Pose, distance: float) -> Pose:
 
 
 def compute_target_eef_pose(target_object_pose: Pose, attached_pose: Pose) -> Pose:
-    """Computes the target EEF pose so that the attached object ends up at target_object_pose.
-    target_object_pose: World pose where the object should be.
-    attached_pose: Pose of the object relative to the EEF (T_eef_obj).
-    """
     return tr.make_pose_abs(target_object_pose, attached_pose.inversed())
 
 
@@ -789,14 +803,14 @@ class RosWorkerRuntime:
         for obj_id, obj in self.collision_objects.items():
             state = obj.metadata.get("state")
 
-            if state == GraspableState.LOST.value:
+            if state == GraspableState.LOST:
                 continue
 
-            if state == GraspableState.HIDEN.value:
+            if state == GraspableState.HIDDEN:
                 continue
 
             # TODO: choose it by id
-            if state == GraspableState.ATTACHED.value:
+            if state == GraspableState.ATTACHED:
                 attached_pose_dict = obj.metadata.get("attached_pose")
                 if attached_pose_dict is None:
                     logger.warning(f"Attached object {obj_id} is missing attached_pose. Skipping.")
@@ -905,7 +919,7 @@ class RosWorkerRuntime:
 
     def get_attached_object_id(self) -> str | None:
         for obj_id, obj in self.collision_objects.items():
-            if obj.metadata.get("state") == GraspableState.ATTACHED.value:
+            if obj.metadata.get("state") == GraspableState.ATTACHED:
                 return obj_id
         return None
 
@@ -917,7 +931,7 @@ class RosWorkerRuntime:
         velocity: float,
         payload: float,
         safe: bool,
-    ) -> None:
+    ) -> dict:
         object = self.collision_objects[object_id]
         object.metadata.pop("attached_pose", None)
 
@@ -926,7 +940,7 @@ class RosWorkerRuntime:
 
             try:
                 self.move_to_pose(pre_grasp_pose, velocity, payload, safe)
-                object.metadata["state"] = GraspableState.HIDEN.value
+                object.metadata["state"] = GraspableState.HIDDEN
 
                 if self.tool:  # Skip vacuum activation/check when no physical tool is configured
                     self.suck(60)
@@ -940,19 +954,18 @@ class RosWorkerRuntime:
                         self.release()
                         raise UrGeneral(f"Failed to attach object {object_id}: vacuum not reached.")
 
-                # TODO: send info to ur
-                object.metadata["state"] = GraspableState.ATTACHED.value
+                object.metadata["state"] = GraspableState.ATTACHED
                 attached_pose = tr.make_pose_rel(grasp_pose, object.pose)
                 object.metadata["attached_pose"] = attached_pose.to_dict()
 
             except Exception:
                 continue
 
-            return
+            return object.metadata.copy()
 
         raise UrGeneral(f"Unable to attach object {object_id}.")
 
-    def detach_object(self, target_pose: Pose, velocity: float, payload: float, safe: bool) -> None:
+    def detach_object(self, target_pose: Pose, velocity: float, payload: float, safe: bool) -> dict[str, Any]:
         object_id = self.get_attached_object_id()
         if object_id is None:
             raise UrGeneral("No object to detach.")
@@ -973,15 +986,17 @@ class RosWorkerRuntime:
 
         self.remove_object(object_id)
 
-        object.metadata["state"] = GraspableState.HIDEN.value
+        object.metadata["state"] = GraspableState.HIDDEN
         object.metadata.pop("attached_pose", None)
         self.update_collisions(self.collision_objects)
         object.pose = target_pose
 
         self.move_to_pose(post_detach_pose, velocity, payload, safe)
 
-        object.metadata["state"] = GraspableState.WORLD.value
+        object.metadata["state"] = GraspableState.WORLD
         self.update_collisions(self.collision_objects)
+
+        return {"object_id": object_id, "state": object.metadata["state"]}
 
     def remove_object(self, object_id: str) -> None:
         moveitpy, _ = self._get_moveit()
@@ -1058,7 +1073,7 @@ def ros_worker_main(
                     pose = Pose.from_dict(kwargs["pose"])
                     result = runtime.move_to_pose(pose, kwargs["velocity"], kwargs["payload"], kwargs["safe"])
                 elif op == "pick_up_object":
-                    runtime.attach_object(
+                    result = runtime.attach_object(
                         kwargs["object_id"],
                         EffectorType(kwargs["effector_type"]),
                         [GraspPosition(gp) for gp in kwargs["grasp_positions"]],
@@ -1066,16 +1081,14 @@ def ros_worker_main(
                         kwargs["payload"],
                         kwargs["safe"],
                     )
-                    result = {}
                 elif op == "place_object":
                     pose = Pose.from_dict(kwargs["pose"])
-                    runtime.detach_object(
+                    result = runtime.detach_object(
                         pose,
                         kwargs["velocity"],
                         kwargs["payload"],
                         kwargs["safe"],
                     )
-                    result = {}
                 elif op == "get_joints":
                     result = runtime.get_joints()
                 elif op == "ik":

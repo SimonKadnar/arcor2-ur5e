@@ -198,7 +198,6 @@ class EffectorType(StrEnum):
     SUCK = "SUCK"
 
 
-# TODO: zmenit na int
 class GraspableState(StrEnum):
     """Logical state of a graspable object in the scene.
 
@@ -221,7 +220,7 @@ class GraspableState(StrEnum):
 
     WORLD = "WORLD"
     RESERVED = "RESERVED"
-    HIDEN = "HIDEN"
+    HIDDEN = "HIDDEN"
     ATTACHED = "ATTACHED"
     LOST = "LOST"
 
@@ -241,6 +240,7 @@ class GraspableSource(StrEnum):
 
     CAMERA = "CAMERA"
     FIXED = "FIXED"
+    # TODO: remove
     OTHER = "OTHER"
 
 
