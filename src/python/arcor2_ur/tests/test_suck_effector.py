@@ -1,7 +1,6 @@
 import pytest
 
-from arcor2.data.common import Orientation, Pose, Position
-from arcor2.data.object_type import Box
+from arcor2.data.common import Pose
 from arcor2_scene_data import scene_service
 from arcor2_ur.object_types.ur5e import Ur5e, UrSettings
 from arcor2_ur.scripts.robot_publisher import load_robot_description
@@ -20,8 +19,6 @@ def test_suck_effector(start_processes: Urls) -> None:
     assert "suction_cup_to_tcp" in robot_description
 
     scene_service.URL = start_processes.robot_url
-    box = Box("UniqueBoxId", 0.1, 0.1, 0.1)
-    scene_service.upsert_collision(box, Pose(Position(1, 0, 0), Orientation(0, 0, 0, 1)))
     scene_service.start()
     assert scene_service.started()
 

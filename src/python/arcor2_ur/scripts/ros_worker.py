@@ -1,20 +1,26 @@
+import copy
 import importlib
 import multiprocessing
+import tempfile
 import threading
 import time
 from multiprocessing.connection import Connection
+from pathlib import Path
 from typing import Any, Callable, cast
 
+import open3d as o3d
 import rclpy  # pants: no-infer-dep
-from geometry_msgs.msg import Pose as RosPose  # pants: no-infer-dep
 from geometry_msgs.msg import PoseStamped  # pants: no-infer-dep
+from geometry_msgs.msg import Point
+from geometry_msgs.msg import Pose as RosPose  # pants: no-infer-dep
 from moveit.planning import MoveItPy, PlanningComponent  # pants: no-infer-dep
 from moveit_msgs.msg import AttachedCollisionObject, CollisionObject  # pants: no-infer-dep
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup  # pants: no-infer-dep
 from rclpy.node import Node  # pants: no-infer-dep
 from rclpy.qos import QoSDurabilityPolicy, QoSProfile, QoSReliabilityPolicy  # pants: no-infer-dep
 from sensor_msgs.msg import JointState  # pants: no-infer-dep
-from shape_msgs.msg import SolidPrimitive  # pants: no-infer-dep
+from shape_msgs.msg import Mesh as RosMesh  # pants: no-infer-dep
+from shape_msgs.msg import MeshTriangle, SolidPrimitive
 from std_msgs.msg import Bool, String  # pants: no-infer-dep
 from std_srvs.srv import Trigger  # pants: no-infer-dep
 from tf2_ros.buffer import Buffer  # pants: no-infer-dep
@@ -55,6 +61,46 @@ def pose_to_ros_pose(ps: Pose) -> RosPose:
     return rp
 
 
+def mesh_file_to_ros_mesh(mesh_data: bytes, asset_id: str) -> RosMesh:
+    if not mesh_data:
+        raise UrGeneral(f"Mesh asset '{asset_id}' is empty.")
+
+    suffix = Path(asset_id).suffix.lower()
+    if not suffix:
+        raise UrGeneral(f"Mesh asset '{asset_id}' has no file extension.")
+
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=True) as tmp:
+        tmp.write(mesh_data)
+        tmp.flush()
+
+        loaded = o3d.io.read_triangle_mesh(tmp.name)
+
+    if loaded.is_empty():
+        raise UrGeneral(f"Mesh asset '{asset_id}' has no geometry.")
+
+    vertices = tuple((float(vertex[0]), float(vertex[1]), float(vertex[2])) for vertex in loaded.vertices)
+    triangles = tuple((int(triangle[0]), int(triangle[1]), int(triangle[2])) for triangle in loaded.triangles)
+
+    if not vertices or not triangles:
+        raise UrGeneral(f"Mesh asset '{asset_id}' has no usable mesh data.")
+
+    ros_mesh = RosMesh()
+
+    for x, y, z in vertices:
+        point = Point()
+        point.x = x
+        point.y = y
+        point.z = z
+        ros_mesh.vertices.append(point)
+
+    for a, b, c in triangles:
+        triangle = MeshTriangle()
+        triangle.vertex_indices = [a, b, c]
+        ros_mesh.triangles.append(triangle)
+
+    return ros_mesh
+
+
 def plan_and_execute(
     robot,
     planning_component,
@@ -91,60 +137,6 @@ def wait_for_future(future, *, timeout_sec: float = 2.0):
         raise UrGeneral("Service call timed out.")
 
     return future.result()
-
-
-# remove id ?
-def create_collision_object(
-    obj: CollisionSceneObject,
-    obj_id: str,
-    frame_id: str,
-    pose_in_frame: Pose,
-    attached_to_link: str | None = None,
-) -> CollisionObject | AttachedCollisionObject:
-
-    collision_object = CollisionObject()
-    collision_object.header.frame_id = frame_id
-    collision_object.id = obj_id
-    collision_object.operation = CollisionObject.ADD
-
-    if isinstance(obj.model, object_type.Box):
-        prim = SolidPrimitive()
-        prim.type = SolidPrimitive.BOX
-        prim.dimensions = [obj.model.size_x, obj.model.size_y, obj.model.size_z]
-
-        collision_object.primitives.append(prim)
-        collision_object.primitive_poses.append(pose_to_ros_pose(pose_in_frame))
-
-    elif isinstance(obj.model, object_type.Sphere):
-        prim = SolidPrimitive()
-        prim.type = SolidPrimitive.SPHERE
-        prim.dimensions = [obj.model.radius]
-
-        collision_object.primitives.append(prim)
-        collision_object.primitive_poses.append(pose_to_ros_pose(pose_in_frame))
-
-    elif isinstance(obj.model, object_type.Cylinder):
-        prim = SolidPrimitive()
-        prim.type = SolidPrimitive.CYLINDER
-        prim.dimensions = [obj.model.height, obj.model.radius]
-
-        collision_object.primitives.append(prim)
-        collision_object.primitive_poses.append(pose_to_ros_pose(pose_in_frame))
-
-    # mal by fungovat subor
-    elif isinstance(obj.model, object_type.Mesh):
-        mesh = storage_client.get_asset_data(obj.model.asset_id)
-
-        collision_object.meshes.append(mesh)
-        collision_object.mesh_poses.append(pose_to_ros_pose(pose_in_frame))
-
-    if attached_to_link is not None:
-        attached = AttachedCollisionObject()
-        attached.link_name = attached_to_link
-        attached.object = collision_object
-        return attached
-
-    return collision_object
 
 
 def rotate_vector(q: Orientation, v: tuple[float, float, float]) -> tuple[float, float, float]:
@@ -519,6 +511,7 @@ class RosWorkerRuntime:
         self.base_link = base_link
         self.tool_link = tool_link
         self.collision_objects = collision_objects.copy()
+        self.mesh_models: dict[str, RosMesh] = {}
         self.joints: list[Joint] = []
         self.tool: VGC10 | None = None
         self.freedrive_mode = False
@@ -806,30 +799,89 @@ class RosWorkerRuntime:
             if state == GraspableState.LOST:
                 continue
 
-            if state == GraspableState.HIDDEN:
+            elif state == GraspableState.HIDDEN:
                 continue
 
             # TODO: choose it by id
-            if state == GraspableState.ATTACHED:
+            elif state == GraspableState.ATTACHED:
                 attached_pose_dict = obj.metadata.get("attached_pose")
                 if attached_pose_dict is None:
                     logger.warning(f"Attached object {obj_id} is missing attached_pose. Skipping.")
                     continue
 
                 pose_in_frame = Pose.from_dict(attached_pose_dict)
-                attached = create_collision_object(obj, obj_id, self.tool_link, pose_in_frame, self.tool_link)
+                attached = self.create_collision_object(obj, obj_id, self.tool_link, pose_in_frame, self.tool_link)
                 if attached:
                     scene.process_attached_collision_object(attached)
                 continue
 
-            # normal collision object
-            pose_in_frame = tr.make_pose_rel(self.base_pose, obj.pose)
-            collision = create_collision_object(obj, obj_id, self.base_link, pose_in_frame)
-            if collision:
-                scene.apply_collision_object(collision)
+            else:  # normal collision object
+                pose_in_frame = tr.make_pose_rel(self.base_pose, obj.pose)
+                collision = self.create_collision_object(obj, obj_id, self.base_link, pose_in_frame)
+                if collision:
+                    scene.apply_collision_object(collision)
 
         scene.current_state.update(force=True)
         scene.current_state.update()
+
+    # remove id ?
+    def create_collision_object(
+        self,
+        obj: CollisionSceneObject,
+        obj_id: str,
+        frame_id: str,
+        pose_in_frame: Pose,
+        attached_to_link: str | None = None,
+    ) -> CollisionObject | AttachedCollisionObject:
+
+        collision_object = CollisionObject()
+        collision_object.header.frame_id = frame_id
+        collision_object.id = obj_id
+        collision_object.operation = CollisionObject.ADD
+
+        if isinstance(obj.model, object_type.Box):
+            prim = SolidPrimitive()
+            prim.type = SolidPrimitive.BOX
+            prim.dimensions = [obj.model.size_x, obj.model.size_y, obj.model.size_z]
+
+            collision_object.primitives.append(prim)
+            collision_object.primitive_poses.append(pose_to_ros_pose(pose_in_frame))
+
+        elif isinstance(obj.model, object_type.Sphere):
+            prim = SolidPrimitive()
+            prim.type = SolidPrimitive.SPHERE
+            prim.dimensions = [obj.model.radius]
+
+            collision_object.primitives.append(prim)
+            collision_object.primitive_poses.append(pose_to_ros_pose(pose_in_frame))
+
+        elif isinstance(obj.model, object_type.Cylinder):
+            prim = SolidPrimitive()
+            prim.type = SolidPrimitive.CYLINDER
+            prim.dimensions = [obj.model.height, obj.model.radius]
+
+            collision_object.primitives.append(prim)
+            collision_object.primitive_poses.append(pose_to_ros_pose(pose_in_frame))
+
+        elif isinstance(obj.model, object_type.Mesh):
+            asset_id = obj.model.asset_id
+            cached_mesh = self.mesh_models.get(asset_id)
+
+            if cached_mesh is None:
+                mesh_data = storage_client.get_asset_data(asset_id)
+                cached_mesh = mesh_file_to_ros_mesh(mesh_data, asset_id)
+                self.mesh_models[asset_id] = cached_mesh
+
+            collision_object.meshes.append(copy.deepcopy(cached_mesh))
+            collision_object.mesh_poses.append(pose_to_ros_pose(pose_in_frame))
+
+        if attached_to_link is not None:
+            attached = AttachedCollisionObject()
+            attached.link_name = attached_to_link
+            attached.object = collision_object
+            return attached
+
+        return collision_object
 
     def get_joints(self) -> list[dict]:
         return [joint.to_dict() for joint in self.joints]
