@@ -11,6 +11,7 @@ import pytest
 
 from arcor2.helpers import find_free_port
 from arcor2_arserver.tests.testutils import CheckHealthException, check_health, log_proc_output
+from arcor2_storage import client as storage_client
 
 LOGGER = logging.getLogger(__name__)
 
@@ -18,6 +19,7 @@ LOGGER = logging.getLogger(__name__)
 class Urls(NamedTuple):
     ros_domain_id: str
     robot_url: str
+    storage_url: str
 
 
 def _finish_processes(processes) -> None:
@@ -27,6 +29,7 @@ def _finish_processes(processes) -> None:
                 os.killpg(proc.pid, signal.SIGTERM)
             except ProcessLookupError:
                 pass
+
             try:
                 proc.wait(timeout=5)
             except sp.TimeoutExpired:
@@ -35,6 +38,7 @@ def _finish_processes(processes) -> None:
                 except ProcessLookupError:
                     pass
                 proc.wait(timeout=1)
+
         log_proc_output(proc.communicate())
 
 
@@ -50,34 +54,45 @@ def _load_ros_env() -> dict[str, str]:
         raise RuntimeError("Failed to source /opt/ros/jazzy/setup.bash") from exc
 
     env: dict[str, str] = {}
+
     for chunk in output.split(b"\0"):
         if not chunk:
             continue
+
         key, _, value = chunk.partition(b"=")
         env[key.decode()] = value.decode()
+
     return env
 
 
 @pytest.fixture(scope="module", params=["ur5e"])
 def start_processes(request) -> Iterator[Urls]:
-    """Starts Dobot dependencies."""
+    """Starts UR test dependencies."""
 
     ros_domain_id = str(random.sample(range(0, 232 + 1), 1)[0])
     ur_type: str = request.param
 
     processes = []
+
     ros_env = _load_ros_env()
     my_env = os.environ.copy()
     my_env.update(ros_env)
     my_env["ROS_DOMAIN_ID"] = ros_domain_id
 
-    # Keep ROS view of the world dominant; strip test-only/debug env for the ROS launcher
+    # Keep ROS view of the world dominant; strip test-only/debug env for the ROS launcher.
     ros_launch_env = {k: v for k, v in my_env.items() if not k.startswith("PEX_")}
+
     for key in ("PYTEST_DISABLE_PLUGIN_AUTOLOAD", "PYTEST_PLUGINS", "PYTHONDEVMODE", "PYTHONWARNINGS"):
         ros_launch_env.pop(key, None)
 
-    kwargs = {"env": my_env, "stdout": sp.PIPE, "stderr": sp.STDOUT, "start_new_session": True}
+    kwargs = {
+        "env": my_env,
+        "stdout": sp.PIPE,
+        "stderr": sp.STDOUT,
+        "start_new_session": True,
+    }
 
+    # Start ROS control with mock hardware.
     processes.append(
         sp.Popen(
             [
@@ -96,15 +111,17 @@ def start_processes(request) -> Iterator[Urls]:
             start_new_session=True,
         )
     )
-    time.sleep(3)  # TODO find another way how to make sure that everything is running
+
+    time.sleep(3)
+
     if processes[-1].poll():
         log_proc_output(processes[-1].communicate())
-        raise Exception("Launch died...")
+        raise Exception("Launch died.")
 
-    # kill default robot_state_publisher
+    # Kill default robot_state_publisher.
     sp.run("pkill -f robot_state_publisher", shell=True)
 
-    # start custom robot_state_publisher with modified URDF
+    # Start custom robot_state_publisher with modified URDF.
     urdf_path = Path(__file__).resolve().parents[1] / "data" / "urdf" / "ur5e.urdf"
 
     custom_rsp = sp.Popen(
@@ -127,14 +144,46 @@ def start_processes(request) -> Iterator[Urls]:
 
     time.sleep(2)
 
+    # Start ARCOR2 storage service.
+    storage_port = find_free_port()
+    storage_url = f"http://127.0.0.1:{storage_port}"
+
+    my_env["ARCOR2_STORAGE_SERVICE_PORT"] = str(storage_port)
+    my_env["ARCOR2_STORAGE_SERVICE_URL"] = storage_url
+    my_env["ARCOR2_STORAGE_DB_PATH"] = f"/tmp/arcor2_storage_{ros_domain_id}.sqlite"
+
+    storage_client.URL = storage_url
+
+    storage_proc = sp.Popen(
+        ["python", "src.python.arcor2_storage.scripts/storage.pex"],
+        **kwargs,
+    )  # type: ignore
+
+    processes.append(storage_proc)
+
+    if storage_proc.poll():
+        _finish_processes(processes)
+        raise Exception("Storage service died.")
+
+    try:
+        check_health("Storage", storage_url, timeout=20)
+    except CheckHealthException:
+        _finish_processes(processes)
+        raise
+
+    # Start UR service.
     robot_url = f"http://0.0.0.0:{find_free_port()}"
+
     my_env["ARCOR2_UR_URL"] = robot_url
     my_env["ARCOR2_UR_INTERACT_WITH_DASHBOARD"] = "false"
     my_env["ARCOR2_UR_TYPE"] = ur_type
     my_env["PEX_EXTRA_SYS_PATH"] = "/opt/ros/jazzy/lib/python3.12/site-packages"
     my_env["ARCOR2_REST_API_DEBUG"] = "true"
 
-    robot_proc = sp.Popen(["python", "src.python.arcor2_ur.scripts/ur.pex"], **kwargs)  # type: ignore
+    robot_proc = sp.Popen(
+        ["python", "src.python.arcor2_ur.scripts/ur.pex"],
+        **kwargs,
+    )  # type: ignore
 
     processes.append(robot_proc)
 
@@ -148,15 +197,18 @@ def start_processes(request) -> Iterator[Urls]:
         _finish_processes(processes)
         raise
 
-    # robot_mode etc. is not published with mock_hw -> there is this helper node to do that
-    # it can't be published from here as it depends on ROS (Python 3.12)
-    robot_pub_proc = sp.Popen(["python", "src.python.arcor2_ur.scripts/robot_publisher.pex"], **kwargs)  # type: ignore
+    # robot_mode etc. is not published with mock_hw -> helper node publishes it.
+    robot_pub_proc = sp.Popen(
+        ["python", "src.python.arcor2_ur.scripts/robot_publisher.pex"],
+        **kwargs,
+    )  # type: ignore
+
     processes.append(robot_pub_proc)
 
     if robot_pub_proc.poll():
         _finish_processes(processes)
         raise Exception("Robot publisher node died.")
 
-    yield Urls(ros_domain_id, robot_url)
+    yield Urls(ros_domain_id, robot_url, storage_url)
 
     _finish_processes(processes)

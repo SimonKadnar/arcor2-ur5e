@@ -1,5 +1,11 @@
 python_sources(
+    sources=[
+        "*.py",
+    ],
     dependencies=[
+        "3rdparty#PyYAML",
+        "3rdparty#numpy",
+        "3rdparty#open3d",
         "src/python/arcor2_ur/data:moveit_yaml",
         "src/python/arcor2_ur/data:urdf_assets",
     ],

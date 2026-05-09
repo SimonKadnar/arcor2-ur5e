@@ -214,15 +214,15 @@ class GraspableState(StrEnum):
     ATTACHED
         Attached to the robot end-effector.
 
-    LOST
-        Object not observable. Location unknown.
+    TOUCH_ALLOWED
+        Object acts as a collision obstacle, except for selected end-effector links.
     """
 
     WORLD = "WORLD"
     RESERVED = "RESERVED"
     HIDDEN = "HIDDEN"
     ATTACHED = "ATTACHED"
-    LOST = "LOST"
+    TOUCH_ALLOWED = "TOUCH_ALLOWED"
 
 
 class GraspableSource(StrEnum):

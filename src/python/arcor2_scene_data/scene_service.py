@@ -6,7 +6,7 @@ from typing import Any
 
 from dataclasses_jsonschema import JsonSchemaMixin
 
-from arcor2.data.common import Pose
+from arcor2.data.common import Pose, Position
 from arcor2.data.object_type import Model3dType, Models
 from arcor2.data.scene import LineCheck, LineCheckResult, MeshFocusAction
 from arcor2.exceptions import Arcor2Exception
@@ -152,6 +152,16 @@ def upsert_graspable(
     rest.call(rest.Method.PUT, f"{URL}/collisions/{model_type}", body=body, params=params)
 
 
+@handle(SceneServiceException, logger, message="Failed to get graspable object state.")
+def graspable_state(object_id: str) -> GraspableState:
+    return GraspableState(rest.call(rest.Method.GET, f"{URL}/graspable/{object_id}/state", return_type=str))
+
+
+@handle(SceneServiceException, logger, message="Failed to get graspable object position.")
+def graspable_position(object_id: str) -> Position:
+    return rest.call(rest.Method.GET, f"{URL}/graspable/{object_id}/position", return_type=Position)
+
+
 @handle(SceneServiceException, logger, message="Failed to delete the collision.")
 def delete_collision_id(collision_id: str) -> None:
     rest.call(rest.Method.DELETE, f"{URL}/collisions/{collision_id}")
@@ -235,6 +245,8 @@ __all__ = [
     SceneServiceException.__name__,
     upsert_collision.__name__,
     upsert_graspable.__name__,
+    graspable_state.__name__,
+    graspable_position.__name__,
     delete_collision_id.__name__,
     collision_ids.__name__,
     focus.__name__,

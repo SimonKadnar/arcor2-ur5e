@@ -82,15 +82,18 @@ def load_custom_urdf() -> str:
     return text
 
 
-moveit_yaml_res = resources.files("arcor2_ur").joinpath("data/moveit.yaml")
+def load_custom_srdf() -> str:
+    srdf_res = resources.files("arcor2_ur").joinpath("data/urdf/ur5e.srdf")
+    return srdf_res.read_text(encoding="utf-8")
 
-with resources.as_file(moveit_yaml_res) as moveit_yaml_path:
+
+moveit_yaml_res = resources.files("arcor2_ur").joinpath("data/moveit.yaml")
+custom_srdf_res = resources.files("arcor2_ur").joinpath("data/urdf/ur5e.srdf")
+
+with resources.as_file(moveit_yaml_res) as moveit_yaml_path, resources.as_file(custom_srdf_res) as custom_srdf_path:
     moveit_config = (
         MoveItConfigsBuilder(robot_name="ur", package_name="ur_moveit_config")
-        .robot_description_semantic(
-            os.path.join(get_package_share_directory("ur_moveit_config"), "srdf", "ur.srdf.xacro"),
-            {"name": UR_TYPE},
-        )
+        .robot_description_semantic(str(custom_srdf_path))
         .trajectory_execution(
             os.path.join(get_package_share_directory("ur_moveit_config"), "config", "moveit_controllers.yaml")
         )
@@ -102,6 +105,7 @@ with resources.as_file(moveit_yaml_res) as moveit_yaml_path:
     ).to_dict()
 
 moveit_config["robot_description"] = load_custom_urdf()
+moveit_config["robot_description_semantic"] = load_custom_srdf()
 
 
 def started() -> bool:
@@ -221,9 +225,21 @@ def get_started() -> RespT:
     return jsonify(started())
 
 
-@app.route("/graspable/pick_up_object", methods=["PUT"])
+@app.route("/graspable/<string:object_id>/state", methods=["GET"])
+def get_graspable_state(object_id: str) -> RespT:
+    """Return graspable object state."""
+    return jsonify(globs.collision_objects[object_id].metadata["state"])
+
+
+@app.route("/graspable/<string:object_id>/position", methods=["GET"])
+def get_graspable_position(object_id: str) -> RespT:
+    """Return graspable object position."""
+    return jsonify(globs.collision_objects[object_id].pose.position.to_dict())
+
+
+@app.route("/graspable/pick_up_object_by_position", methods=["PUT"])
 @requires_started
-def pick_up_object() -> RespT:
+def pick_up_object_by_position() -> RespT:
     """Find nearest graspable object and attach it.
     ---
     put:
@@ -304,8 +320,11 @@ def pick_up_object() -> RespT:
         ],
     )
 
-    object_type_cls = getattr(object_type, body["object_type_name"]) if body.get("object_type_name") else None
-
+    object_type_name = (
+        object_type.MODEL_MAPPING[object_type.Model3dType(body["object_type_name"])]
+        if body.get("object_type_name")
+        else None
+    )
     velocity = float(body.get("velocity", 50.0)) / 100.0
     payload = float(body.get("payload", 0.0))
     safe = bool(body.get("safe", True))
@@ -320,7 +339,7 @@ def pick_up_object() -> RespT:
         if obj.metadata.get("state") != GraspableState.WORLD:
             continue
 
-        if object_type_cls is not None and not isinstance(obj.model, object_type_cls):
+        if object_type_name is not None and not isinstance(obj.model, object_type_name):
             continue
 
         current_distance = position.distance(obj.pose.position)
@@ -345,6 +364,102 @@ def pick_up_object() -> RespT:
         metadata = globs.state.worker.request(
             "pick_up_object",
             object_id=nearest_id,
+            effector_type=effector_type,
+            grasp_positions=grasp_positions,
+            velocity=velocity,
+            payload=payload,
+            safe=safe,
+        )
+
+        selected.metadata.clear()
+        selected.metadata.update(metadata)
+    except Exception:
+        selected.metadata["state"] = previous_state
+        globs.state.worker.request("update_collisions", collision_objects=globs.collision_objects)
+        raise
+
+    return Response(status=204)
+
+
+@app.route("/graspable/pick_up_object_by_id", methods=["PUT"])
+@requires_started
+def pick_up_object_by_id() -> RespT:
+    """Attach graspable object by ID.
+    ---
+    put:
+        tags:
+            - Graspable
+        summary: Attach graspable object by ID.
+        requestBody:
+            required: true
+            content:
+                application/json:
+                    schema:
+                        type: object
+                        required:
+                            - object_id
+                        properties:
+                            object_id:
+                                type: string
+                            effector_type:
+                                type: string
+                                default: suck
+                            grasp_positions:
+                            type: array
+                            items:
+                                type: string
+                            velocity:
+                                type: number
+                                format: float
+                                default: 50.0
+                            payload:
+                                type: number
+                                format: float
+                                default: 0.0
+                            safe:
+                                type: boolean
+                                default: true
+        responses:
+            204:
+                description: Ok
+            500:
+                description: "Error types: **General**, **UrGeneral**."
+                content:
+                    application/json:
+                        schema:
+                            $ref: WebApiError
+    """
+    body = humps.decamelize(request.json)
+
+    object_id = body["object_id"]
+    effector_type = EffectorType(body.get("effector_type", EffectorType.SUCK))
+    grasp_positions = body.get(
+        "grasp_positions",
+        [
+            GraspPosition.TOP,
+            GraspPosition.RIGHT,
+            GraspPosition.LEFT,
+            GraspPosition.FRONT,
+            GraspPosition.BACK,
+            GraspPosition.BOTTOM,
+            GraspPosition.ALL,
+        ],
+    )
+    velocity = float(body.get("velocity", 50.0)) / 100.0
+    payload = float(body.get("payload", 0.0))
+    safe = bool(body.get("safe", True))
+
+    selected = globs.collision_objects[object_id]
+    previous_state = selected.metadata.get("state")
+    selected.metadata["state"] = GraspableState.RESERVED
+
+    assert globs.state
+
+    try:
+        globs.state.worker.request("update_collisions", collision_objects=globs.collision_objects)
+        metadata = globs.state.worker.request(
+            "pick_up_object",
+            object_id=object_id,
             effector_type=effector_type,
             grasp_positions=grasp_positions,
             velocity=velocity,
@@ -931,7 +1046,13 @@ def put_eef_pose() -> RespT:
     payload = float(request.args.get("payload", default=0.0))
     safe = request.args.get("safe", default="true") == "true"
 
-    globs.state.worker.request("move_to_pose", pose=pose.to_dict(), velocity=velocity, payload=payload, safe=safe)
+    globs.state.worker.request(
+        "move_to_pose",
+        pose=pose.to_dict(),
+        velocity=velocity,
+        payload=payload,
+        safe=safe,
+    )
     return Response(status=204)
 
 

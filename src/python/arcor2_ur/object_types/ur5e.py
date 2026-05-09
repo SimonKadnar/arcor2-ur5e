@@ -4,6 +4,7 @@ from typing import cast
 
 from dataclasses_jsonschema import JsonSchemaMixin
 
+from arcor2.data import object_type
 from arcor2.data.common import ActionMetadata, Joint, Pose, Position, StrEnum
 from arcor2.data.robot import InverseKinematicsRequest
 from arcor2_object_types.abstract import EffectorType, GraspPosition, Robot, Settings
@@ -25,12 +26,22 @@ class Vacuum(JsonSchemaMixin):
 
 
 @dataclass
-class PickUpObject(JsonSchemaMixin):
+class PickUpObjectByPosition(JsonSchemaMixin):
     position: Position
     radius: float
     effector_type: EffectorType = EffectorType.SUCK
     grasp_positions: list[GraspPosition] = field(default_factory=lambda: [GraspPosition.ALL])
-    object_type_name: None | str = None
+    object_type_name: object_type.Model3dType | None = None
+    velocity: float = 50.0
+    payload: float = 0.0
+    safe: bool = True
+
+
+@dataclass
+class PickUpObjectById(JsonSchemaMixin):
+    object_id: str
+    effector_type: EffectorType = EffectorType.SUCK
+    grasp_positions: list[GraspPosition] = field(default_factory=lambda: [GraspPosition.ALL])
     velocity: float = 50.0
     payload: float = 0.0
     safe: bool = True
@@ -99,9 +110,18 @@ class Ur5e(Robot):
         return rest.call(rest.Method.GET, f"{self.settings.url}/eef/pose", return_type=Pose)
 
     def move_to_pose(
-        self, end_effector_id: str, target_pose: Pose, speed: float, safe: bool = True, linear: bool = True
+        self,
+        end_effector_id: str,
+        target_pose: Pose,
+        speed: float,
+        safe: bool = True,
+        linear: bool = True,
     ) -> None:
-        self.move(target_pose, speed * 100, safe)
+        self.move(
+            target_pose,
+            speed * 100,
+            safe=safe,
+        )
 
     def move(
         self,
@@ -130,16 +150,21 @@ class Ur5e(Robot):
                 rest.Method.PUT,
                 f"{self.settings.url}/eef/pose",
                 body=pose,
-                params={"velocity": speed, "payload": payload, "safe": safe},
+                timeout=rest.Timeout(read=120),
+                params={
+                    "velocity": speed,
+                    "payload": payload,
+                    "safe": safe,
+                },
             )
 
-    def pick_up_object(
+    def pick_up_object_by_position(
         self,
         position: Position,
         radius: float,
         effector_type: EffectorType = EffectorType.SUCK,
         grasp_positions: list[GraspPosition] | None = None,
-        object_type_name: str = "",
+        object_type_name: object_type.Model3dType | None = None,
         speed: float = 50.0,
         safe: bool = True,
         payload: float = 0.0,
@@ -151,7 +176,7 @@ class Ur5e(Robot):
         :param position: Center of the area where the object should be found.
         :param radius: Search radius.
         :param effector_type: Type of end effector used for grasping.
-        :param grasp_position: Preferred grasp position.
+        :param grasp_positions: Preferred grasp positions.
         :param object_type_name: Optional object model type filter.
         :param speed: Relative speed.
         :param safe: Avoid collisions.
@@ -169,17 +194,61 @@ class Ur5e(Robot):
         with self._move_lock:
             rest.call(
                 rest.Method.PUT,
-                f"{self.settings.url}/graspable/pick_up_object",
-                body=PickUpObject(
+                f"{self.settings.url}/graspable/pick_up_object_by_position",
+                body=PickUpObjectByPosition(
                     position=position,
                     radius=radius,
                     effector_type=effector_type,
                     grasp_positions=grasp_positions,
-                    object_type_name=object_type_name or None,
+                    object_type_name=object_type_name,
                     velocity=speed,
                     payload=payload,
                     safe=safe,
                 ),
+                timeout=rest.Timeout(read=120),
+            )
+
+    def pick_up_object_by_id(
+        self,
+        object_id: str,
+        effector_type: EffectorType = EffectorType.SUCK,
+        grasp_positions: list[GraspPosition] | None = None,
+        speed: float = 50.0,
+        safe: bool = True,
+        payload: float = 0.0,
+        *,
+        an: None | str = None,
+    ) -> None:
+        """Picks up a graspable object by its ID.
+
+        :param object_id: Collision/graspable object ID.
+        :param effector_type: Type of end effector used for grasping.
+        :param grasp_positions: Preferred grasp positions.
+        :param speed: Relative speed.
+        :param safe: Avoid collisions.
+        :param payload: Object weight.
+        :return:
+        """
+
+        assert 0.0 <= speed <= 100.0
+        assert 0.0 <= payload <= 5.0
+
+        if grasp_positions is None:
+            grasp_positions = [GraspPosition.ALL]
+
+        with self._move_lock:
+            rest.call(
+                rest.Method.PUT,
+                f"{self.settings.url}/graspable/pick_up_object_by_id",
+                body=PickUpObjectById(
+                    object_id=object_id,
+                    effector_type=effector_type,
+                    grasp_positions=grasp_positions,
+                    velocity=speed,
+                    payload=payload,
+                    safe=safe,
+                ),
+                timeout=rest.Timeout(read=120),
             )
 
     def place_object(
@@ -213,6 +282,7 @@ class Ur5e(Robot):
                     payload=payload,
                     safe=safe,
                 ),
+                timeout=rest.Timeout(read=120),
             )
 
     def suck(
@@ -292,5 +362,6 @@ class Ur5e(Robot):
         )
 
     move.__action__ = ActionMetadata()  # type: ignore
-    pick_up_object.__action__ = ActionMetadata()  # type: ignore
+    pick_up_object_by_position.__action__ = ActionMetadata()  # type: ignore
+    pick_up_object_by_id.__action__ = ActionMetadata()  # type: ignore
     place_object.__action__ = ActionMetadata()  # type: ignore

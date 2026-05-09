@@ -314,7 +314,7 @@
   <joint name="suction_base_to_cup" type="fixed">
     <parent link="suction_base_link"/>
     <child link="suction_cup_link"/>
-    <origin xyz="0 0 0.188" rpy="0 0 0"/>
+    <origin xyz="0 0 0.19" rpy="0 0 0"/>
   </joint>
 
   <link name="suction_tcp"/>
