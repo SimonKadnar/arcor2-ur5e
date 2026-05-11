@@ -42,6 +42,7 @@ RUN set -euo pipefail \
         && apt-get update \
         && /root/install_ur_dependencies.sh \
         && apt-get install -y -q --no-install-recommends \
+        ros-jazzy-rviz2 \
         libglib2.0-0t64 \
         libgomp1 \
         libusb-1.0-0 \

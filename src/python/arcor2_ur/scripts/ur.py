@@ -141,7 +141,7 @@ def put_start() -> RespT:
               content:
                 application/json:
                   schema:
-                    $ref: Pose
+                    $ref: '#/components/schemas/Pose'
         responses:
             204:
               description: Ok
@@ -267,20 +267,30 @@ def pick_up_object_by_position() -> RespT:
                             - radius
                         properties:
                             position:
-                                $ref: Position
+                                $ref: '#/components/schemas/Position'
                             radius:
                                 type: number
                                 format: float
                             effector_type:
                                 type: string
-                                default: suck
+                                enum:
+                                    - SUCK
+                                default: SUCK
                             grasp_positions:
                                 type: array
                                 items:
                                     type: string
+                                    enum:
+                                        - TOP
+                                        - RIGHT
+                                        - LEFT
+                                        - FRONT
+                                        - BACK
+                                        - BOTTOM
+                                        - ALL
                             object_type_name:
                                 type: string
-                                default: none
+                                description: Optional model type filter.
                             velocity:
                                 type: number
                                 format: float
@@ -413,11 +423,21 @@ def pick_up_object_by_id() -> RespT:
                                 type: string
                             effector_type:
                                 type: string
-                                default: suck
+                                enum:
+                                    - SUCK
+                                default: SUCK
                             grasp_positions:
-                            type: array
-                            items:
-                                type: string
+                                type: array
+                                items:
+                                    type: string
+                                    enum:
+                                        - TOP
+                                        - RIGHT
+                                        - LEFT
+                                        - FRONT
+                                        - BACK
+                                        - BOTTOM
+                                        - ALL
                             velocity:
                                 type: number
                                 format: float
@@ -518,10 +538,25 @@ def place_object() -> RespT:
                         properties:
                             object_id:
                                 type: string
+                                description: Optional object ID.
                             effector_type:
                                 type: string
+                                enum:
+                                    - SUCK
+                                default: SUCK
                             pose:
-                                $ref: Pose
+                                $ref: '#/components/schemas/Pose'
+                            velocity:
+                                type: number
+                                format: float
+                                default: 50.0
+                            payload:
+                                type: number
+                                format: float
+                                default: 0.0
+                            safe:
+                                type: boolean
+                                default: true
         responses:
             204:
                 description: Ok
@@ -564,7 +599,7 @@ def put_box() -> RespT:
     put:
         tags:
             - Collisions
-        description: Add or update collision box.
+        description: Add or update collision box. Use metadata.object_type=graspable for graspable objects.
         parameters:
             - name: boxId
               in: query
@@ -588,10 +623,41 @@ def put_box() -> RespT:
                 type: number
                 format: float
         requestBody:
-              content:
+            required: true
+            content:
                 application/json:
-                  schema:
-                    $ref: Pose
+                    schema:
+                        type: object
+                        required:
+                            - pose
+                        properties:
+                            pose:
+                                $ref: '#/components/schemas/Pose'
+                            metadata:
+                                type: object
+                                description: Optional metadata for graspable object support.
+                                properties:
+                                    object_type:
+                                        type: string
+                                        enum:
+                                            - graspable
+                                    state:
+                                        type: string
+                                        enum:
+                                            - WORLD
+                                            - RESERVED
+                                            - HIDDEN
+                                            - ATTACHED
+                                    source:
+                                        type: string
+                                        enum:
+                                            - CAMERA
+                                            - FIXED
+                                            - OTHER
+                                    stamp:
+                                        type: string
+                                        format: date-time
+                                additionalProperties: true
         responses:
             204:
                 description: Ok
@@ -623,7 +689,7 @@ def put_sphere() -> RespT:
     put:
         tags:
             - Collisions
-        description: Add or update collision sphere.
+        description: Add or update collision sphere. Use metadata.object_type=graspable for graspable objects.
         parameters:
             - name: sphereId
               in: query
@@ -637,10 +703,41 @@ def put_sphere() -> RespT:
                 type: number
                 format: float
         requestBody:
-              content:
+            required: true
+            content:
                 application/json:
-                  schema:
-                    $ref: Pose
+                    schema:
+                        type: object
+                        required:
+                            - pose
+                        properties:
+                            pose:
+                                $ref: '#/components/schemas/Pose'
+                            metadata:
+                                type: object
+                                description: Optional metadata for graspable object support.
+                                properties:
+                                    object_type:
+                                        type: string
+                                        enum:
+                                            - graspable
+                                    state:
+                                        type: string
+                                        enum:
+                                            - WORLD
+                                            - RESERVED
+                                            - HIDDEN
+                                            - ATTACHED
+                                    source:
+                                        type: string
+                                        enum:
+                                            - CAMERA
+                                            - FIXED
+                                            - OTHER
+                                    stamp:
+                                        type: string
+                                        format: date-time
+                                additionalProperties: true
         responses:
             204:
               description: Ok
@@ -672,7 +769,7 @@ def put_cylinder() -> RespT:
     put:
         tags:
             - Collisions
-        description: Add or update collision cylinder.
+        description: Add or update collision cylinder. Use metadata.object_type=graspable for graspable objects.
         parameters:
             - name: cylinderId
               in: query
@@ -691,17 +788,44 @@ def put_cylinder() -> RespT:
                 type: number
                 format: float
         requestBody:
-              content:
+            required: true
+            content:
                 application/json:
-                  schema:
-                    $ref: Pose
+                    schema:
+                        type: object
+                        required:
+                            - pose
+                        properties:
+                            pose:
+                                $ref: '#/components/schemas/Pose'
+                            metadata:
+                                type: object
+                                description: Optional metadata for graspable object support.
+                                properties:
+                                    object_type:
+                                        type: string
+                                        enum:
+                                            - graspable
+                                    state:
+                                        type: string
+                                        enum:
+                                            - WORLD
+                                            - RESERVED
+                                            - HIDDEN
+                                            - ATTACHED
+                                    source:
+                                        type: string
+                                        enum:
+                                            - CAMERA
+                                            - FIXED
+                                            - OTHER
+                                    stamp:
+                                        type: string
+                                        format: date-time
+                                additionalProperties: true
         responses:
-            200:
+            204:
               description: Ok
-              content:
-                application/json:
-                  schema:
-                    type: string
             500:
               description: "Error types: **General**, **SceneGeneral**."
               content:
@@ -730,7 +854,7 @@ def put_mesh() -> RespT:
     put:
         tags:
             - Collisions
-        description: Add or update collision mesh.
+        description: Add or update collision mesh. Use metadata.object_type=graspable for graspable objects.
         parameters:
             - name: meshId
               in: query
@@ -761,10 +885,41 @@ def put_mesh() -> RespT:
                 format: float
                 default: 1.0
         requestBody:
-              content:
+            required: true
+            content:
                 application/json:
-                  schema:
-                    $ref: Pose
+                    schema:
+                        type: object
+                        required:
+                            - pose
+                        properties:
+                            pose:
+                                $ref: '#/components/schemas/Pose'
+                            metadata:
+                                type: object
+                                description: Optional metadata for graspable object support.
+                                properties:
+                                    object_type:
+                                        type: string
+                                        enum:
+                                            - graspable
+                                    state:
+                                        type: string
+                                        enum:
+                                            - WORLD
+                                            - RESERVED
+                                            - HIDDEN
+                                            - ATTACHED
+                                    source:
+                                        type: string
+                                        enum:
+                                            - CAMERA
+                                            - FIXED
+                                            - OTHER
+                                    stamp:
+                                        type: string
+                                        format: date-time
+                                additionalProperties: true
         responses:
             204:
               description: Ok
@@ -880,7 +1035,7 @@ def get_joints() -> RespT:
                     schema:
                         type: array
                         items:
-                            $ref: Joint
+                            $ref: '#/components/schemas/Joint'
             500:
               description: "Error types: **General**, **StartError**."
               content:
@@ -905,7 +1060,7 @@ def put_ik() -> RespT:
               content:
                 application/json:
                   schema:
-                    $ref: InverseKinematicsRequest
+                    $ref: '#/components/schemas/InverseKinematicsRequest'
         responses:
             200:
               description: Ok
@@ -914,7 +1069,7 @@ def put_ik() -> RespT:
                     schema:
                         type: array
                         items:
-                            $ref: Joint
+                            $ref: '#/components/schemas/Joint'
             500:
               description: "Error types: **General**, **DobotGeneral**, **StartError**."
               content:
@@ -1007,7 +1162,7 @@ def get_eef_pose() -> RespT:
               content:
                 application/json:
                     schema:
-                        $ref: Pose
+                        $ref: '#/components/schemas/Pose'
             500:
               description: "Error types: **General**, **StartError**."
               content:
@@ -1055,7 +1210,7 @@ def put_eef_pose() -> RespT:
               content:
                 application/json:
                   schema:
-                    $ref: Pose
+                    $ref: '#/components/schemas/Pose'
         responses:
             200:
               description: Ok
@@ -1137,7 +1292,7 @@ def get_vacuum() -> RespT:
               content:
                 application/json:
                   schema:
-                    $ref: Vacuum
+                    $ref: '#/components/schemas/Vacuum'
             500:
               description: "Error types: **General**, **StartError**."
               content:
