@@ -17,6 +17,7 @@ python_tests(
         "test_collision/test_*.py",
         "test_pick_up/test_*.py",
         "test_pick_and_place/test_*.py",
+        "test_pick_and_move_whit_collisions/test_*.py",
     ],
     dependencies=[
         ":test_utils",

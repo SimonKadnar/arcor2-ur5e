@@ -228,13 +228,23 @@ def get_started() -> RespT:
 @app.route("/graspable/<string:object_id>/state", methods=["GET"])
 def get_graspable_state(object_id: str) -> RespT:
     """Return graspable object state."""
-    return jsonify(globs.collision_objects[object_id].metadata["state"])
+    try:
+        obj = globs.collision_objects[object_id]
+    except KeyError:
+        raise NotFound("Graspable object not found")
+
+    return jsonify(obj.metadata["state"])
 
 
 @app.route("/graspable/<string:object_id>/position", methods=["GET"])
 def get_graspable_position(object_id: str) -> RespT:
     """Return graspable object position."""
-    return jsonify(globs.collision_objects[object_id].pose.position.to_dict())
+    try:
+        obj = globs.collision_objects[object_id]
+    except KeyError:
+        raise NotFound("Graspable object not found")
+
+    return jsonify(obj.pose.position.to_dict())
 
 
 @app.route("/graspable/pick_up_object_by_position", methods=["PUT"])
@@ -449,7 +459,17 @@ def pick_up_object_by_id() -> RespT:
     payload = float(body.get("payload", 0.0))
     safe = bool(body.get("safe", True))
 
-    selected = globs.collision_objects[object_id]
+    try:
+        selected = globs.collision_objects[object_id]
+    except KeyError:
+        raise NotFound("Graspable object not found")
+
+    if selected.metadata.get("object_type") != "graspable":
+        raise UrGeneral(f"Object {object_id} is not graspable.")
+
+    if selected.metadata.get("state") != GraspableState.WORLD:
+        raise UrGeneral(f"Object {object_id} is not in WORLD state.")
+
     previous_state = selected.metadata.get("state")
     selected.metadata["state"] = GraspableState.RESERVED
 
@@ -758,6 +778,16 @@ def put_mesh() -> RespT:
     pose, metadata = parse_collision_body()
 
     args = humps.decamelize(request.args.to_dict())
+
+    mesh_scale = (
+        float(args.get("mesh_scale_x", 1.0)),
+        float(args.get("mesh_scale_y", 1.0)),
+        float(args.get("mesh_scale_z", 1.0)),
+    )
+
+    metadata = metadata.copy()
+    metadata["mesh_scale"] = mesh_scale
+
     mesh = object_type.Mesh(args["mesh_id"], args["mesh_file_id"])
 
     globs.collision_objects[mesh.id] = CollisionSceneObject(mesh, pose, metadata)

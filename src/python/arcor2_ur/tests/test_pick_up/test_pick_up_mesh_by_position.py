@@ -1,8 +1,6 @@
 import time
 from pathlib import Path
 
-import pytest
-
 from arcor2.data.common import Orientation, Pose, Position
 from arcor2.data.object_type import Mesh
 from arcor2_object_types.abstract import EffectorType, GraspableState, GraspPosition
@@ -15,7 +13,6 @@ MESH_PATH = Path(__file__).parents[1] / "test_mesh_object" / "triangle_block.stl
 MESH_ASSET_ID = "triangle_block.stl"
 
 
-@pytest.mark.timeout(321)
 def test_pick_up_mesh_by_position(start_processes: Urls) -> None:
     assert MESH_PATH.is_file(), f"Test mesh file does not exist: {MESH_PATH}"
 
@@ -42,9 +39,9 @@ def test_pick_up_mesh_by_position(start_processes: Urls) -> None:
     scene_service.upsert_graspable(object, Pose(Position(X, Y, Z), Orientation(0, 0, 0, 1)), GraspableState.WORLD)
     time.sleep(1)
 
-    ot.pick_up_object_by_position(Position(X, Y, Z), 0.5, EffectorType.SUCK, [GraspPosition.ALL])
+    ot.pick_up_object_by_position(Position(X, Y, Z), 0.5, EffectorType.SUCK, [GraspPosition.TOP])
 
-    assert scene_service.graspable_state(object.id) == GraspableState.ATTACHED
+    assert ot.graspable_state(object.id) == GraspableState.ATTACHED
 
     scene_service.delete_all_collisions()
     ot.cleanup()

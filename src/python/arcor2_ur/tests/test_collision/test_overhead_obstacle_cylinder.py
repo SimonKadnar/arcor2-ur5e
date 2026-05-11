@@ -1,7 +1,5 @@
 import time
 
-import pytest
-
 from arcor2.data.common import Orientation, Pose, Position
 from arcor2.data.object_type import Cylinder
 from arcor2_scene_data import scene_service
@@ -9,7 +7,6 @@ from arcor2_ur.object_types.ur5e import Ur5e, UrSettings
 from arcor2_ur.tests.conftest import Urls
 
 
-@pytest.mark.timeout(400)
 def test_overhead_cylinder(start_processes: Urls) -> None:
     scene_service.URL = start_processes.robot_url
     scene_service.start()

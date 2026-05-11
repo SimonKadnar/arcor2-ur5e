@@ -7,7 +7,7 @@ from dataclasses_jsonschema import JsonSchemaMixin
 from arcor2.data import object_type
 from arcor2.data.common import ActionMetadata, Joint, Pose, Position, StrEnum
 from arcor2.data.robot import InverseKinematicsRequest
-from arcor2_object_types.abstract import EffectorType, GraspPosition, Robot, Settings
+from arcor2_object_types.abstract import EffectorType, GraspableState, GraspPosition, Robot, Settings
 from arcor2_web import rest
 
 
@@ -284,6 +284,26 @@ class Ur5e(Robot):
                 ),
                 timeout=rest.Timeout(read=120),
             )
+
+    def graspable_state(self, object_id: str) -> GraspableState:
+        """Returns graspable object state from the UR service."""
+
+        return GraspableState(
+            rest.call(
+                rest.Method.GET,
+                f"{self.settings.url}/graspable/{object_id}/state",
+                return_type=str,
+            )
+        )
+
+    def graspable_position(self, object_id: str) -> Position:
+        """Returns graspable object position from the UR service."""
+
+        return rest.call(
+            rest.Method.GET,
+            f"{self.settings.url}/graspable/{object_id}/position",
+            return_type=Position,
+        )
 
     def suck(
         self,

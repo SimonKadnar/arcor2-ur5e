@@ -67,7 +67,20 @@ def pose_to_ros_pose(ps: Pose) -> RosPose:
     return rp
 
 
-def mesh_file_to_ros_mesh(mesh_data: bytes, asset_id: str) -> RosMesh:
+def mesh_scale_from_metadata(metadata: dict[str, Any]) -> tuple[float, float, float]:
+    scale = metadata.get("mesh_scale", (1.0, 1.0, 1.0))
+
+    if not isinstance(scale, (list, tuple)) or len(scale) != 3:
+        raise UrGeneral("Invalid mesh scale metadata.")
+
+    return float(scale[0]), float(scale[1]), float(scale[2])
+
+
+def mesh_file_to_ros_mesh(
+    mesh_data: bytes,
+    asset_id: str,
+    scale: tuple[float, float, float] = (1.0, 1.0, 1.0),
+) -> RosMesh:
     if not mesh_data:
         raise UrGeneral(f"Mesh asset '{asset_id}' is empty.")
 
@@ -84,7 +97,14 @@ def mesh_file_to_ros_mesh(mesh_data: bytes, asset_id: str) -> RosMesh:
     if loaded.is_empty():
         raise UrGeneral(f"Mesh asset '{asset_id}' has no geometry.")
 
-    vertices = tuple((float(vertex[0]), float(vertex[1]), float(vertex[2])) for vertex in loaded.vertices)
+    vertices = tuple(
+        (
+            float(vertex[0]) * scale[0],
+            float(vertex[1]) * scale[1],
+            float(vertex[2]) * scale[2],
+        )
+        for vertex in loaded.vertices
+    )
     triangles = tuple((int(triangle[0]), int(triangle[1]), int(triangle[2])) for triangle in loaded.triangles)
 
     if not vertices or not triangles:
@@ -443,7 +463,7 @@ class RosWorkerRuntime:
         self.base_link = base_link
         self.tool_link = tool_link
         self.collision_objects = collision_objects.copy()
-        self.mesh_models: dict[str, RosMesh] = {}
+        self.mesh_models: dict[tuple[str, tuple[float, float, float]], RosMesh] = {}
         self.joints: list[Joint] = []
         self.tool: VGC10 | None = None
         self.freedrive_mode = False
@@ -762,37 +782,29 @@ class RosWorkerRuntime:
 
                 pose_in_frame = Pose.from_dict(cast(dict[str, Any], attached_pose_dict))
 
-                attached = self.create_collision_object(obj, obj_id, self.tool_link, pose_in_frame, self.tool_link)
+                attached = self.create_collision_object(obj, pose_in_frame, attach=True)
                 scene.process_attached_collision_object(attached)
                 logger.info(f"Attached object id: {obj_id}")
                 continue
 
             else:  # normal collision object
                 pose_in_frame = tr.make_pose_rel(self.base_pose, obj.pose)
-                collision = self.create_collision_object(obj, obj_id, self.base_link, pose_in_frame)
+                collision = self.create_collision_object(obj, pose_in_frame)
                 scene.apply_collision_object(collision)
-
-            if state == GraspableState.TOUCH_ALLOWED:
-                self.allow_collision_between_object_and_links(
-                    scene, obj_id, [self.tool_link, "suction_base_link", "suction_cup_link", "suction_tcp"]
-                )  # TODO auto
 
         scene.current_state.update(force=True)
         scene.current_state.update()
 
-    # remove id ?
     def create_collision_object(
-        self,
-        obj: CollisionSceneObject,
-        obj_id: str,
-        frame_id: str,
-        pose_in_frame: Pose,
-        attached_to_link: str | None = None,
+        self, obj: CollisionSceneObject, pose_in_frame: Pose, attach: bool = False
     ) -> CollisionObject | AttachedCollisionObject:
 
         collision_object = CollisionObject()
-        collision_object.header.frame_id = frame_id
-        collision_object.id = obj_id
+        if attach:
+            collision_object.header.frame_id = self.tool_link
+        else:
+            collision_object.header.frame_id = self.base_link
+        collision_object.id = obj.model.id
         collision_object.operation = CollisionObject.ADD
 
         if isinstance(obj.model, object_type.Box):
@@ -821,66 +833,26 @@ class RosWorkerRuntime:
 
         elif isinstance(obj.model, object_type.Mesh):
             asset_id = obj.model.asset_id
-            cached_mesh = self.mesh_models.get(asset_id)
+            scale = mesh_scale_from_metadata(obj.metadata)
+            cache_key = (asset_id, scale)
+            cached_mesh = self.mesh_models.get(cache_key)
 
             if cached_mesh is None:
                 mesh_data = storage_client.get_asset_data(asset_id)
-                cached_mesh = mesh_file_to_ros_mesh(mesh_data, asset_id)
-                self.mesh_models[asset_id] = cached_mesh
+                cached_mesh = mesh_file_to_ros_mesh(mesh_data, asset_id, scale)
+                self.mesh_models[cache_key] = cached_mesh
 
             collision_object.meshes.append(copy.deepcopy(cached_mesh))
             collision_object.mesh_poses.append(pose_to_ros_pose(pose_in_frame))
 
-        if attached_to_link is not None:
+        if attach:
             attached = AttachedCollisionObject()
-            attached.link_name = attached_to_link
+            attached.link_name = self.tool_link
             attached.object = collision_object
-            attached.touch_links = [attached_to_link, "suction_base_link", "suction_cup_link"]
+            attached.touch_links = [self.tool_link, "suction_base_link", "suction_cup_link"]  # robot parts
             return attached
 
         return collision_object
-
-    def allow_collision_between_object_and_links(self, scene, object_id: str, link_names: list[str]) -> None:
-        acm = scene.planning_scene_message.allowed_collision_matrix
-
-        names = list(acm.entry_names)
-        values = list(acm.entry_values)
-
-        for name in [object_id, *link_names]:
-            if name not in names:
-                names.append(name)
-                for row in values:
-                    row.enabled.append(False)
-
-                new_row = copy.deepcopy(values[0]) if values else type(acm.entry_values[0])()
-                new_row.enabled = [False] * len(names)
-                values.append(new_row)
-
-        for link_name in link_names:
-            i = names.index(object_id)
-            j = names.index(link_name)
-            values[i].enabled[j] = True
-            values[j].enabled[i] = True
-
-        acm.entry_names = names
-        acm.entry_values = values
-
-    def filter_grasps_by_ik(self, grasp_options: list[tuple[Pose, Pose]]) -> list[tuple[Pose, Pose]]:
-        valid = []
-
-        for pre_grasp_pose, grasp_pose in grasp_options:
-            try:
-                self.inverse_kinematics(
-                    InverseKinematicsRequest(pose=pre_grasp_pose, start_joints=self.joints, avoid_collisions=True)
-                )
-                self.inverse_kinematics(
-                    InverseKinematicsRequest(pose=grasp_pose, start_joints=self.joints, avoid_collisions=False)
-                )
-                valid.append((pre_grasp_pose, grasp_pose))
-            except Exception:
-                continue
-
-        return valid
 
     def get_joints(self) -> list[dict]:
         return [joint.to_dict() for joint in self.joints]
@@ -983,20 +955,37 @@ class RosWorkerRuntime:
         ros_mesh = None
         if isinstance(object.model, object_type.Mesh):
             asset_id = object.model.asset_id
-            ros_mesh = self.mesh_models.get(asset_id)
+            scale = mesh_scale_from_metadata(object.metadata)
+            cache_key = (asset_id, scale)
+            ros_mesh = self.mesh_models.get(cache_key)
 
             if ros_mesh is None:
                 mesh_data = storage_client.get_asset_data(asset_id)
-                ros_mesh = mesh_file_to_ros_mesh(mesh_data, asset_id)
-                self.mesh_models[asset_id] = ros_mesh
+                ros_mesh = mesh_file_to_ros_mesh(mesh_data, asset_id, scale)
+                self.mesh_models[cache_key] = ros_mesh
 
         grasp_options = generate_grasp_poses(object, effector_type, grasp_positions, ros_mesh)
         logger.info(f"Generated {len(grasp_options)} grasp options for object {object_id}.")
 
-        grasp_options = self.filter_grasps_by_ik(grasp_options)
-        logger.info(f"IK accepted: {len(grasp_options)} grasp options.")
-
+        trail = 0
         for pre_grasp_pose, grasp_pose in grasp_options:
+            trail += 1
+            try:
+                self.inverse_kinematics(
+                    InverseKinematicsRequest(pose=pre_grasp_pose, start_joints=self.joints, avoid_collisions=False)
+                )
+                self.inverse_kinematics(
+                    InverseKinematicsRequest(pose=grasp_pose, start_joints=self.joints, avoid_collisions=False)
+                )
+                logger.info(f"IK accepted: {trail} grasp options.")
+            except Exception as exc:
+                logger.exception(
+                    f"IK rejected: {trail}/{len(grasp_options)} grasp candidate. "
+                    f"pre_grasp_pose={pre_grasp_pose.to_dict()}, "
+                    f"grasp_pose={grasp_pose.to_dict()}: {exc}"
+                )
+                continue
+
             try:
                 self.move_to_pose(pre_grasp_pose, velocity, payload, safe)
 
@@ -1004,7 +993,7 @@ class RosWorkerRuntime:
                     self.suck(60)
                     time.sleep(1.0)
 
-                object.metadata["state"] = GraspableState.TOUCH_ALLOWED
+                object.metadata["state"] = GraspableState.HIDDEN
                 self.update_collisions(self.collision_objects)
 
                 self.move_to_pose(grasp_pose, velocity, payload, safe)
@@ -1021,7 +1010,21 @@ class RosWorkerRuntime:
 
                 self.update_collisions(self.collision_objects)
 
-            except Exception:
+            except Exception as exc:
+                logger.exception(
+                    f"Failed grasp candidate {trail}/{len(grasp_options)} "
+                    f"for object {object_id}. "
+                    f"pre_grasp_pose={pre_grasp_pose.to_dict()}, "
+                    f"grasp_pose={grasp_pose.to_dict()}: {exc}"
+                )
+
+                if self.tool:
+                    self.release()
+
+                object.metadata.pop("attached_pose", None)
+                object.metadata["state"] = GraspableState.WORLD
+                self.update_collisions(self.collision_objects)
+
                 continue
 
             return object.metadata.copy()
@@ -1056,8 +1059,6 @@ class RosWorkerRuntime:
             self.release()
             time.sleep(1.0)
 
-        object.metadata["state"] = GraspableState.TOUCH_ALLOWED
-        self.remove_attached_object(object_id)
         object.metadata.pop("attached_pose", None)
         object.pose = target_pose
         self.update_collisions(self.collision_objects)

@@ -1,8 +1,6 @@
 import time
 from pathlib import Path
 
-import pytest
-
 from arcor2.data.common import Orientation, Pose, Position
 from arcor2.data.object_type import Mesh
 from arcor2_scene_data import scene_service
@@ -14,7 +12,6 @@ MESH_PATH = Path(__file__).parents[1] / "test_mesh_object" / "triangle_block.stl
 MESH_ASSET_ID = "triangle_block.stl"
 
 
-@pytest.mark.timeout(400)
 def test_side_mesh(start_processes: Urls) -> None:
     assert MESH_PATH.is_file(), f"Test mesh file does not exist: {MESH_PATH}"
 

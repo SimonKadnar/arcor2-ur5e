@@ -213,16 +213,12 @@ class GraspableState(StrEnum):
 
     ATTACHED
         Attached to the robot end-effector.
-
-    TOUCH_ALLOWED
-        Object acts as a collision obstacle, except for selected end-effector links.
     """
 
     WORLD = "WORLD"
     RESERVED = "RESERVED"
     HIDDEN = "HIDDEN"
     ATTACHED = "ATTACHED"
-    TOUCH_ALLOWED = "TOUCH_ALLOWED"
 
 
 class GraspableSource(StrEnum):

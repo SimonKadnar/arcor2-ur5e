@@ -9,8 +9,8 @@ from arcor2.data.common import Orientation, Pose, Position
 from arcor2_object_types.abstract import EffectorType, GraspPosition
 from arcor2_ur.common import CollisionSceneObject
 
-PRE_GRASP_OFFSET = 0.2
-GRASP_OFFSET = -0.01
+PRE_GRASP_OFFSET = 0.12
+GRASP_OFFSET = 0.06
 
 
 def generate_grasp_poses(
@@ -25,6 +25,8 @@ def generate_grasp_poses(
     geometry = filter_geometry_by_grasp_position(mesh, grasp_positions)
 
     candidates = create_grasp_candidates_from_surfaces(geometry, effector_type)
+
+    candidates.sort(key=candidate_sort_key)
 
     return candidates[:20]
 
@@ -101,12 +103,12 @@ def filter_geometry_by_grasp_position(
     normals = np.asarray(mesh.triangle_normals)
 
     wanted_dirs = {
-        GraspPosition.TOP: (0.0, 0.0, 1.0),
         GraspPosition.BOTTOM: (0.0, 0.0, -1.0),
-        GraspPosition.RIGHT: (1.0, 0.0, 0.0),
-        GraspPosition.LEFT: (-1.0, 0.0, 0.0),
         GraspPosition.BACK: (0.0, 1.0, 0.0),
         GraspPosition.FRONT: (0.0, -1.0, 0.0),
+        GraspPosition.LEFT: (-1.0, 0.0, 0.0),
+        GraspPosition.RIGHT: (1.0, 0.0, 0.0),
+        GraspPosition.TOP: (0.0, 0.0, 1.0),
     }
 
     kept = []
@@ -231,3 +233,20 @@ def normalize_orientation(q: Orientation) -> Orientation:
 
 def cross(a: tuple[float, float, float], b: tuple[float, float, float]) -> tuple[float, float, float]:
     return (a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0])
+
+
+def candidate_sort_key(candidate: tuple[Pose, Pose]) -> tuple[float, float, float, float]:
+    pre_grasp_pose, grasp_pose = candidate
+
+    return (
+        -grasp_pose.position.z,
+        abs(grasp_pose.position.y),
+        abs(grasp_pose.position.x),
+        distance_from_origin(pre_grasp_pose),
+    )
+
+
+def distance_from_origin(pose: Pose) -> float:
+    return math.sqrt(
+        pose.position.x * pose.position.x + pose.position.y * pose.position.y + pose.position.z * pose.position.z
+    )
