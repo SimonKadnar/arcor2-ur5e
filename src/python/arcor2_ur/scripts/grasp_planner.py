@@ -6,8 +6,7 @@ from shape_msgs.msg import Mesh as RosMesh  # pants: no-infer-dep
 
 from arcor2.data import object_type
 from arcor2.data.common import Orientation, Pose, Position
-from arcor2_object_types.abstract import EffectorType, GraspPosition
-from arcor2_ur.common import CollisionSceneObject
+from arcor2_ur.common import CollisionSceneObject, EffectorType, GraspPosition
 
 PRE_GRASP_OFFSET = 0.12
 GRASP_OFFSET = 0.06
@@ -16,13 +15,13 @@ GRASP_OFFSET = 0.06
 def generate_grasp_poses(
     obj: CollisionSceneObject,
     effector_type: EffectorType,
-    grasp_positions: list[GraspPosition] | None,
+    grasp_position: GraspPosition = GraspPosition.ALL,
     ros_mesh: RosMesh | None = None,
 ) -> list[tuple[Pose, Pose]]:
 
     mesh = object_to_mesh(obj, ros_mesh)
 
-    geometry = filter_geometry_by_grasp_position(mesh, grasp_positions)
+    geometry = filter_geometry_by_grasp_position(mesh, grasp_position)
 
     candidates = create_grasp_candidates_from_surfaces(geometry, effector_type)
 
@@ -90,11 +89,11 @@ def quaternion_to_rotation_matrix(q: Orientation) -> np.ndarray:
 
 def filter_geometry_by_grasp_position(
     mesh: o3d.geometry.TriangleMesh,
-    grasp_positions: list[GraspPosition] | None,
+    grasp_position: GraspPosition = GraspPosition.ALL,
 ) -> o3d.geometry.TriangleMesh:
     """TOP/BOTTOM/LEFT/RIGHT/FRONT/BACK filter."""
 
-    if grasp_positions is None or GraspPosition.ALL in grasp_positions:
+    if grasp_position == GraspPosition.ALL:
         return mesh
 
     mesh.compute_triangle_normals()
@@ -113,13 +112,9 @@ def filter_geometry_by_grasp_position(
 
     kept = []
     for triangle, normal in zip(triangles, normals):
-        for pos in grasp_positions:
-            direction = wanted_dirs.get(pos)
-            if (
-                direction is not None and dot(normal, direction) >= 0.707
-            ):  # maximum allowed rotation from the original normal: 45°
-                kept.append(triangle)
-                break
+        direction = wanted_dirs[grasp_position]
+        if dot(normal, direction) >= 0.707:  # maximum allowed rotation from the original normal: 45°
+            kept.append(triangle)
 
     filtered = o3d.geometry.TriangleMesh()
     filtered.vertices = mesh.vertices

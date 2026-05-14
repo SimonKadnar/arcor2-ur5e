@@ -9,12 +9,13 @@ from PIL import Image
 
 from arcor2 import CancelDict, DynamicParamDict
 from arcor2.data.camera import CameraParameters
-from arcor2.data.common import ActionMetadata, Joint, Pose, SceneObject, StrEnum
+from arcor2.data.common import ActionMetadata, Joint, Pose, SceneObject
 from arcor2.data.object_type import Models, PrimitiveModels
 from arcor2.data.robot import RobotType
 from arcor2.docstring import parse_docstring
 from arcor2.exceptions import Arcor2Exception, Arcor2NotImplemented
 from arcor2.helpers import NonBlockingLock
+from arcor2_ur.common import GraspableSource, GraspableState
 
 
 class GenericException(Arcor2Exception):
@@ -182,62 +183,6 @@ class CollisionObject(GenericWithPose):
         self.enabled = state
 
     set_enabled.__action__ = ActionMetadata()  # type: ignore
-
-
-class GraspPosition(StrEnum):
-    TOP = "TOP"
-    RIGHT = "RIGHT"
-    LEFT = "LEFT"
-    FRONT = "FRONT"
-    BACK = "BACK"
-    BOTTOM = "BOTTOM"
-    ALL = "ALL"
-
-
-class EffectorType(StrEnum):
-    SUCK = "SUCK"
-
-
-class GraspableState(StrEnum):
-    """Logical state of a graspable object in the scene.
-
-    WORLD
-        Free object in the environment. Acts as a collision obstacle.
-
-    RESERVED
-        Reserved by the robot. Waiting for pickup.
-
-    HIDDEN
-        Object is hidden so the robot can attach it.
-        This state is used only in ros_worker file.
-
-    ATTACHED
-        Attached to the robot end-effector.
-    """
-
-    WORLD = "WORLD"
-    RESERVED = "RESERVED"
-    HIDDEN = "HIDDEN"
-    ATTACHED = "ATTACHED"
-
-
-class GraspableSource(StrEnum):
-    """Source of the object pose information.
-
-    CAMERA
-        Detected by a vision system.
-
-    FIXED
-        Predefined static object.
-
-    OTHER
-        Arbitrary or unspecified source (e.g., tests, debugging, simulations, or other scenarios).
-    """
-
-    CAMERA = "CAMERA"
-    FIXED = "FIXED"
-    # TODO: remove
-    OTHER = "OTHER"
 
 
 def _utc_now_iso() -> str:

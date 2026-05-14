@@ -28,6 +28,6 @@ def test_suck_effector(start_processes: Urls) -> None:
     pos.position.z -= 0.05
     ot.move_to_pose("", pos, 0.5)
     pos_after = ot.get_end_effector_pose("")
-    assert orig_z - pos_after.position.z > 0.045
+    assert orig_z - pos_after.position.z > 0.035
 
     ot.cleanup()

@@ -21,9 +21,8 @@ from arcor2.data.common import Joint, Pose
 from arcor2.data.robot import InverseKinematicsRequest
 from arcor2.helpers import port_from_url
 from arcor2.logging import get_logger
-from arcor2_object_types.abstract import EffectorType, GraspableState, GraspPosition
 from arcor2_ur import version
-from arcor2_ur.common import CollisionSceneObject, parse_collision_body
+from arcor2_ur.common import CollisionSceneObject, EffectorType, GraspableState, GraspPosition, parse_collision_body
 from arcor2_ur.exceptions import NotFound, StartError, UrGeneral, WebApiError
 from arcor2_ur.object_types.ur5e import Vacuum
 from arcor2_ur.scripts.ros_worker import RosWorkerClient
@@ -141,7 +140,7 @@ def put_start() -> RespT:
               content:
                 application/json:
                   schema:
-                    $ref: '#/components/schemas/Pose'
+                    $ref: Pose
         responses:
             204:
               description: Ok
@@ -276,18 +275,17 @@ def pick_up_object_by_position() -> RespT:
                                 enum:
                                     - SUCK
                                 default: SUCK
-                            grasp_positions:
-                                type: array
-                                items:
-                                    type: string
-                                    enum:
-                                        - TOP
-                                        - RIGHT
-                                        - LEFT
-                                        - FRONT
-                                        - BACK
-                                        - BOTTOM
-                                        - ALL
+                            grasp_position:
+                                type: string
+                                enum:
+                                    - TOP
+                                    - RIGHT
+                                    - LEFT
+                                    - FRONT
+                                    - BACK
+                                    - BOTTOM
+                                    - ALL
+                                default: ALL
                             object_type_name:
                                 type: string
                                 description: Optional model type filter.
@@ -327,18 +325,7 @@ def pick_up_object_by_position() -> RespT:
         raise UrGeneral("Radius has to be >= 0.")
 
     effector_type = EffectorType(body.get("effector_type", EffectorType.SUCK))
-    grasp_positions = body.get(
-        "grasp_positions",
-        [
-            GraspPosition.TOP,
-            GraspPosition.RIGHT,
-            GraspPosition.LEFT,
-            GraspPosition.FRONT,
-            GraspPosition.BACK,
-            GraspPosition.BOTTOM,
-            GraspPosition.ALL,
-        ],
-    )
+    grasp_position = GraspPosition(body.get("grasp_position", GraspPosition.ALL))
 
     object_type_name = (
         object_type.MODEL_MAPPING[object_type.Model3dType(body["object_type_name"])]
@@ -385,7 +372,7 @@ def pick_up_object_by_position() -> RespT:
             "pick_up_object",
             object_id=nearest_id,
             effector_type=effector_type,
-            grasp_positions=grasp_positions,
+            grasp_position=grasp_position,
             velocity=velocity,
             payload=payload,
             safe=safe,
@@ -426,18 +413,17 @@ def pick_up_object_by_id() -> RespT:
                                 enum:
                                     - SUCK
                                 default: SUCK
-                            grasp_positions:
-                                type: array
-                                items:
-                                    type: string
-                                    enum:
-                                        - TOP
-                                        - RIGHT
-                                        - LEFT
-                                        - FRONT
-                                        - BACK
-                                        - BOTTOM
-                                        - ALL
+                            grasp_position:
+                                type: string
+                                enum:
+                                    - TOP
+                                    - RIGHT
+                                    - LEFT
+                                    - FRONT
+                                    - BACK
+                                    - BOTTOM
+                                    - ALL
+                                default: ALL
                             velocity:
                                 type: number
                                 format: float
@@ -463,18 +449,7 @@ def pick_up_object_by_id() -> RespT:
 
     object_id = body["object_id"]
     effector_type = EffectorType(body.get("effector_type", EffectorType.SUCK))
-    grasp_positions = body.get(
-        "grasp_positions",
-        [
-            GraspPosition.TOP,
-            GraspPosition.RIGHT,
-            GraspPosition.LEFT,
-            GraspPosition.FRONT,
-            GraspPosition.BACK,
-            GraspPosition.BOTTOM,
-            GraspPosition.ALL,
-        ],
-    )
+    grasp_position = GraspPosition(body.get("grasp_position", GraspPosition.ALL))
     velocity = float(body.get("velocity", 50.0)) / 100.0
     payload = float(body.get("payload", 0.0))
     safe = bool(body.get("safe", True))
@@ -501,7 +476,7 @@ def pick_up_object_by_id() -> RespT:
             "pick_up_object",
             object_id=object_id,
             effector_type=effector_type,
-            grasp_positions=grasp_positions,
+            grasp_position=grasp_position,
             velocity=velocity,
             payload=payload,
             safe=safe,
@@ -545,7 +520,7 @@ def place_object() -> RespT:
                                     - SUCK
                                 default: SUCK
                             pose:
-                                $ref: '#/components/schemas/Pose'
+                                $ref: Pose
                             velocity:
                                 type: number
                                 format: float
@@ -632,7 +607,7 @@ def put_box() -> RespT:
                             - pose
                         properties:
                             pose:
-                                $ref: '#/components/schemas/Pose'
+                                $ref: Pose
                             metadata:
                                 type: object
                                 description: Optional metadata for graspable object support.
@@ -712,7 +687,7 @@ def put_sphere() -> RespT:
                             - pose
                         properties:
                             pose:
-                                $ref: '#/components/schemas/Pose'
+                                $ref: Pose
                             metadata:
                                 type: object
                                 description: Optional metadata for graspable object support.
@@ -797,7 +772,7 @@ def put_cylinder() -> RespT:
                             - pose
                         properties:
                             pose:
-                                $ref: '#/components/schemas/Pose'
+                                $ref: Pose
                             metadata:
                                 type: object
                                 description: Optional metadata for graspable object support.
@@ -894,7 +869,7 @@ def put_mesh() -> RespT:
                             - pose
                         properties:
                             pose:
-                                $ref: '#/components/schemas/Pose'
+                                $ref: Pose
                             metadata:
                                 type: object
                                 description: Optional metadata for graspable object support.
@@ -1035,7 +1010,7 @@ def get_joints() -> RespT:
                     schema:
                         type: array
                         items:
-                            $ref: '#/components/schemas/Joint'
+                            $ref: Joint
             500:
               description: "Error types: **General**, **StartError**."
               content:
@@ -1060,7 +1035,7 @@ def put_ik() -> RespT:
               content:
                 application/json:
                   schema:
-                    $ref: '#/components/schemas/InverseKinematicsRequest'
+                    $ref: InverseKinematicsRequest
         responses:
             200:
               description: Ok
@@ -1069,7 +1044,7 @@ def put_ik() -> RespT:
                     schema:
                         type: array
                         items:
-                            $ref: '#/components/schemas/Joint'
+                            $ref: Joint
             500:
               description: "Error types: **General**, **DobotGeneral**, **StartError**."
               content:
@@ -1162,7 +1137,7 @@ def get_eef_pose() -> RespT:
               content:
                 application/json:
                     schema:
-                        $ref: '#/components/schemas/Pose'
+                        $ref: Pose
             500:
               description: "Error types: **General**, **StartError**."
               content:
@@ -1210,7 +1185,7 @@ def put_eef_pose() -> RespT:
               content:
                 application/json:
                   schema:
-                    $ref: '#/components/schemas/Pose'
+                    $ref: Pose
         responses:
             200:
               description: Ok
@@ -1292,7 +1267,7 @@ def get_vacuum() -> RespT:
               content:
                 application/json:
                   schema:
-                    $ref: '#/components/schemas/Vacuum'
+                    $ref: Vacuum
             500:
               description: "Error types: **General**, **StartError**."
               content:

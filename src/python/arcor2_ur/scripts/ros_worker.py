@@ -13,13 +13,11 @@ import rclpy  # pants: no-infer-dep
 from geometry_msgs.msg import Point  # pants: no-infer-dep
 from geometry_msgs.msg import Pose as RosPose  # pants: no-infer-dep
 from moveit.planning import MoveItPy, PlanningComponent  # pants: no-infer-dep
-from moveit_msgs.msg import (  # pants: no-infer-dep
-    AttachedCollisionObject,
-    CollisionObject,
-    Constraints,
-    OrientationConstraint,
-    PositionConstraint,
-)
+from moveit_msgs.msg import AttachedCollisionObject  # pants: no-infer-dep
+from moveit_msgs.msg import CollisionObject  # pants: no-infer-dep
+from moveit_msgs.msg import Constraints  # pants: no-infer-dep
+from moveit_msgs.msg import OrientationConstraint  # pants: no-infer-dep
+from moveit_msgs.msg import PositionConstraint  # pants: no-infer-dep
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup  # pants: no-infer-dep
 from rclpy.node import Node  # pants: no-infer-dep
 from rclpy.qos import QoSDurabilityPolicy, QoSProfile, QoSReliabilityPolicy  # pants: no-infer-dep
@@ -39,10 +37,9 @@ from arcor2.data import object_type
 from arcor2.data.common import Joint, Orientation, Pose, Position
 from arcor2.data.robot import InverseKinematicsRequest
 from arcor2.logging import get_logger
-from arcor2_object_types.abstract import EffectorType, GraspableState, GraspPosition
 from arcor2_storage import client as storage_client
 from arcor2_ur import topics
-from arcor2_ur.common import CollisionSceneObject
+from arcor2_ur.common import CollisionSceneObject, EffectorType, GraspableState, GraspPosition
 from arcor2_ur.exceptions import UrGeneral
 from arcor2_ur.object_types.ur5e import Vacuum
 from arcor2_ur.scripts.grasp_planner import generate_grasp_poses
@@ -65,15 +62,6 @@ def pose_to_ros_pose(ps: Pose) -> RosPose:
     rp.orientation.z = ps.orientation.z
     rp.orientation.w = ps.orientation.w
     return rp
-
-
-def mesh_scale_from_metadata(metadata: dict[str, Any]) -> tuple[float, float, float]:
-    scale = metadata.get("mesh_scale", (1.0, 1.0, 1.0))
-
-    if not isinstance(scale, (list, tuple)) or len(scale) != 3:
-        raise UrGeneral("Invalid mesh scale metadata.")
-
-    return float(scale[0]), float(scale[1]), float(scale[2])
 
 
 def mesh_file_to_ros_mesh(
@@ -206,7 +194,6 @@ def rotate_vector(q: Orientation, v: tuple[float, float, float]) -> tuple[float,
     vx, vy, vz = v
 
     # quaternion * vector * quaternion_conjugate
-    # vector berieme ako quaternion (vx, vy, vz, 0)
     tx = 2 * (y * vz - z * vy)
     ty = 2 * (z * vx - x * vz)
     tz = 2 * (x * vy - y * vx)
@@ -833,7 +820,7 @@ class RosWorkerRuntime:
 
         elif isinstance(obj.model, object_type.Mesh):
             asset_id = obj.model.asset_id
-            scale = mesh_scale_from_metadata(obj.metadata)
+            scale = obj.metadata.get("mesh_scale", (1.0, 1.0, 1.0))
             cache_key = (asset_id, scale)
             cached_mesh = self.mesh_models.get(cache_key)
 
@@ -944,7 +931,7 @@ class RosWorkerRuntime:
         self,
         object_id: str,
         effector_type: EffectorType,
-        grasp_positions: list[GraspPosition] | None,
+        grasp_position: GraspPosition,
         velocity: float,
         payload: float,
         safe: bool,
@@ -955,7 +942,7 @@ class RosWorkerRuntime:
         ros_mesh = None
         if isinstance(object.model, object_type.Mesh):
             asset_id = object.model.asset_id
-            scale = mesh_scale_from_metadata(object.metadata)
+            scale = object.metadata.get("mesh_scale", (1.0, 1.0, 1.0))
             cache_key = (asset_id, scale)
             ros_mesh = self.mesh_models.get(cache_key)
 
@@ -964,7 +951,7 @@ class RosWorkerRuntime:
                 ros_mesh = mesh_file_to_ros_mesh(mesh_data, asset_id, scale)
                 self.mesh_models[cache_key] = ros_mesh
 
-        grasp_options = generate_grasp_poses(object, effector_type, grasp_positions, ros_mesh)
+        grasp_options = generate_grasp_poses(object, effector_type, grasp_position, ros_mesh)
         logger.info(f"Generated {len(grasp_options)} grasp options for object {object_id}.")
 
         trail = 0
@@ -989,7 +976,7 @@ class RosWorkerRuntime:
             try:
                 self.move_to_pose(pre_grasp_pose, velocity, payload, safe)
 
-                if self.tool:
+                if self.tool and effector_type == EffectorType.SUCK:
                     self.suck(60)
                     time.sleep(1.0)
 
@@ -998,7 +985,7 @@ class RosWorkerRuntime:
 
                 self.move_to_pose(grasp_pose, velocity, payload, safe)
 
-                if self.tool:
+                if self.tool and effector_type == EffectorType.SUCK:
                     vac = Vacuum.from_dict(self.vacuum())
                     if vac.avg() < 20:
                         self.release()
@@ -1059,12 +1046,11 @@ class RosWorkerRuntime:
             self.release()
             time.sleep(1.0)
 
-        object.metadata.pop("attached_pose", None)
-        object.pose = target_pose
-        self.update_collisions(self.collision_objects)
-
         self.move_to_pose(post_detach_pose, velocity, payload, safe)
 
+        self.remove_attached_object(object_id)
+        object.metadata.pop("attached_pose", None)
+        object.pose = target_pose
         object.metadata["state"] = GraspableState.WORLD
         self.update_collisions(self.collision_objects)
 
@@ -1174,7 +1160,7 @@ def ros_worker_main(
                     result = runtime.attach_object(
                         kwargs["object_id"],
                         EffectorType(kwargs["effector_type"]),
-                        [GraspPosition(gp) for gp in kwargs["grasp_positions"]],
+                        GraspPosition(kwargs["grasp_position"]),
                         kwargs["velocity"],
                         kwargs["payload"],
                         kwargs["safe"],

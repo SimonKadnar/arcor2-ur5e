@@ -1,5 +1,5 @@
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import cast
 
 from dataclasses_jsonschema import JsonSchemaMixin
@@ -7,7 +7,8 @@ from dataclasses_jsonschema import JsonSchemaMixin
 from arcor2.data import object_type
 from arcor2.data.common import ActionMetadata, Joint, Pose, Position, StrEnum
 from arcor2.data.robot import InverseKinematicsRequest
-from arcor2_object_types.abstract import EffectorType, GraspableState, GraspPosition, Robot, Settings
+from arcor2_object_types.abstract import Robot, Settings
+from arcor2_ur.common import EffectorType, GraspableState, GraspPosition
 from arcor2_web import rest
 
 
@@ -30,7 +31,7 @@ class PickUpObjectByPosition(JsonSchemaMixin):
     position: Position
     radius: float
     effector_type: EffectorType = EffectorType.SUCK
-    grasp_positions: list[GraspPosition] = field(default_factory=lambda: [GraspPosition.ALL])
+    grasp_position: GraspPosition = GraspPosition.ALL
     object_type_name: object_type.Model3dType | None = None
     velocity: float = 50.0
     payload: float = 0.0
@@ -41,7 +42,7 @@ class PickUpObjectByPosition(JsonSchemaMixin):
 class PickUpObjectById(JsonSchemaMixin):
     object_id: str
     effector_type: EffectorType = EffectorType.SUCK
-    grasp_positions: list[GraspPosition] = field(default_factory=lambda: [GraspPosition.ALL])
+    grasp_position: GraspPosition = GraspPosition.ALL
     velocity: float = 50.0
     payload: float = 0.0
     safe: bool = True
@@ -163,7 +164,7 @@ class Ur5e(Robot):
         position: Position,
         radius: float,
         effector_type: EffectorType = EffectorType.SUCK,
-        grasp_positions: list[GraspPosition] | None = None,
+        grasp_position: GraspPosition = GraspPosition.ALL,
         object_type_name: object_type.Model3dType | None = None,
         speed: float = 50.0,
         safe: bool = True,
@@ -176,7 +177,7 @@ class Ur5e(Robot):
         :param position: Center of the area where the object should be found.
         :param radius: Search radius.
         :param effector_type: Type of end effector used for grasping.
-        :param grasp_positions: Preferred grasp positions.
+        :param grasp_position: Preferred grasp position.
         :param object_type_name: Optional object model type filter.
         :param speed: Relative speed.
         :param safe: Avoid collisions.
@@ -188,9 +189,6 @@ class Ur5e(Robot):
         assert 0.0 <= speed <= 100.0
         assert 0.0 <= payload <= 5.0
 
-        if grasp_positions is None:
-            grasp_positions = [GraspPosition.ALL]
-
         with self._move_lock:
             rest.call(
                 rest.Method.PUT,
@@ -199,7 +197,7 @@ class Ur5e(Robot):
                     position=position,
                     radius=radius,
                     effector_type=effector_type,
-                    grasp_positions=grasp_positions,
+                    grasp_position=grasp_position,
                     object_type_name=object_type_name,
                     velocity=speed,
                     payload=payload,
@@ -212,7 +210,7 @@ class Ur5e(Robot):
         self,
         object_id: str,
         effector_type: EffectorType = EffectorType.SUCK,
-        grasp_positions: list[GraspPosition] | None = None,
+        grasp_position: GraspPosition = GraspPosition.ALL,
         speed: float = 50.0,
         safe: bool = True,
         payload: float = 0.0,
@@ -223,7 +221,7 @@ class Ur5e(Robot):
 
         :param object_id: Collision/graspable object ID.
         :param effector_type: Type of end effector used for grasping.
-        :param grasp_positions: Preferred grasp positions.
+        :param grasp_position: Preferred grasp position.
         :param speed: Relative speed.
         :param safe: Avoid collisions.
         :param payload: Object weight.
@@ -233,9 +231,6 @@ class Ur5e(Robot):
         assert 0.0 <= speed <= 100.0
         assert 0.0 <= payload <= 5.0
 
-        if grasp_positions is None:
-            grasp_positions = [GraspPosition.ALL]
-
         with self._move_lock:
             rest.call(
                 rest.Method.PUT,
@@ -243,7 +238,7 @@ class Ur5e(Robot):
                 body=PickUpObjectById(
                     object_id=object_id,
                     effector_type=effector_type,
-                    grasp_positions=grasp_positions,
+                    grasp_position=grasp_position,
                     velocity=speed,
                     payload=payload,
                     safe=safe,
